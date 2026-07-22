@@ -1,6 +1,6 @@
 CC := gcc
 
-CFLAGS := -Wall -Wextra -Wpedantic -std=c11 -Iinclude
+CFLAGS := -Wall -Wextra -Wpedantic -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude
 
 TARGET := build/edgesentinel
 
