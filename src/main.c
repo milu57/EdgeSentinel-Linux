@@ -3,34 +3,22 @@
 #include <unistd.h>
 
 #include "cpu_monitor.h"
+#include "disk_monitor.h"
 #include "system_monitor.h"
 
 /*
- * 控制主循环是否继续运行。
- *
- * volatile：
- * 防止编译器假设这个变量不会突然变化。
- *
- * sig_atomic_t：
- * 适合在信号处理函数和普通程序之间传递简单状态。
+ * 1 GiB = 1024 × 1024 × 1024 字节。
+ */
+#define BYTES_PER_GIB 1073741824.0
+
+/*
+ * 控制程序主循环。
  */
 static volatile sig_atomic_t keep_running = 1;
 
-/*
- * 用户按下 Ctrl+C 后，系统调用这个函数。
- */
 static void handle_sigint(int signal_number)
 {
-    /*
-     * 当前不使用 signal_number，
-     * 显式转换为 void 可消除编译器警告。
-     */
     (void)signal_number;
-
-    /*
-     * 不在信号处理函数中执行复杂操作，
-     * 只通知主循环停止。
-     */
     keep_running = 0;
 }
 
@@ -42,19 +30,17 @@ int main(void)
     CpuTimes current_cpu;
 
     MemoryInfo memory_info;
+    DiskInfo disk_info;
 
     double cpu_usage;
 
     /*
-     * 配置 SIGINT，也就是 Ctrl+C 的处理方式。
+     * 配置 Ctrl+C 信号处理。
      */
     action.sa_handler = handle_sigint;
     sigemptyset(&action.sa_mask);
     action.sa_flags = 0;
 
-    /*
-     * 注册信号处理函数。
-     */
     if (sigaction(SIGINT, &action, NULL) == -1)
     {
         perror("sigaction");
@@ -62,8 +48,8 @@ int main(void)
     }
 
     /*
-     * CPU 使用率需要比较两次累计数据，
-     * 所以程序启动时先取得第一份数据。
+     * CPU 使用率需要两次采样，
+     * 因此启动时先读取一次。
      */
     if (read_cpu_times(&previous_cpu) != 0)
     {
@@ -72,18 +58,15 @@ int main(void)
     }
 
     printf("EdgeSentinel system monitor started.\n");
+    printf("Monitoring disk mount point: /\n");
     printf("Press Ctrl+C to stop.\n\n");
 
     while (keep_running)
     {
-        /*
-         * 等待一秒，形成 CPU 统计区间。
-         */
         sleep(1);
 
         /*
-         * Ctrl+C 可能在 sleep 期间发生，
-         * 所以 sleep 返回后重新检查循环状态。
+         * Ctrl+C 可能使 sleep 提前结束。
          */
         if (!keep_running)
         {
@@ -91,7 +74,7 @@ int main(void)
         }
 
         /*
-         * 读取第二份 CPU 累计时间。
+         * 读取当前 CPU 数据。
          */
         if (read_cpu_times(&current_cpu) != 0)
         {
@@ -99,9 +82,6 @@ int main(void)
             return 1;
         }
 
-        /*
-         * 根据前后两次数据计算这一秒内的 CPU 使用率。
-         */
         cpu_usage = calculate_cpu_usage(
             &previous_cpu,
             &current_cpu
@@ -114,10 +94,7 @@ int main(void)
         }
 
         /*
-         * 从 /proc/meminfo 读取当前内存信息。
-         *
-         * 内存使用率不需要读取两次，
-         * 因为它描述的是当前时刻的内存状态。
+         * 读取内存数据。
          */
         if (get_memory_info(&memory_info) != 0)
         {
@@ -125,12 +102,37 @@ int main(void)
             return 1;
         }
 
-        printf("CPU Usage:    %.2f%%\n", cpu_usage);
-        printf("Memory Usage: %.2f%%\n", memory_info.usage_percent);
-        printf("----------------------------\n");
+        /*
+         * 读取根文件系统 / 的磁盘数据。
+         */
+        if (get_disk_info("/", &disk_info) != 0)
+        {
+            fprintf(stderr, "Failed to read disk information\n");
+            return 1;
+        }
+
+        printf("CPU Usage:       %6.2f%%\n",
+               cpu_usage);
+
+        printf("Memory Usage:    %6.2f%%\n",
+               memory_info.usage_percent);
+
+        printf("Disk Usage:      %6.2f%%\n",
+               disk_info.usage_percent);
+
+        printf("Disk Total:      %6.2f GiB\n",
+               disk_info.total_bytes / BYTES_PER_GIB);
+
+        printf("Disk Used:       %6.2f GiB\n",
+               disk_info.used_bytes / BYTES_PER_GIB);
+
+        printf("Disk Available:  %6.2f GiB\n",
+               disk_info.available_bytes / BYTES_PER_GIB);
+
+        printf("--------------------------------\n");
 
         /*
-         * 本轮 CPU 数据作为下一轮的旧数据。
+         * 为下一轮 CPU 计算保存当前数据。
          */
         previous_cpu = current_cpu;
     }
@@ -139,4 +141,3 @@ int main(void)
 
     return 0;
 }
-
