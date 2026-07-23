@@ -5,6 +5,7 @@
 #include "cpu_monitor.h"
 #include "disk_monitor.h"
 #include "system_monitor.h"
+#include "system_status.h"
 
 /*
  * 1 GiB = 1024 × 1024 × 1024 字节。
@@ -31,7 +32,12 @@ int main(void)
 
     MemoryInfo memory_info;
     DiskInfo disk_info;
+    SystemUptime system_uptime;
+    LoadAverage load_average;
+    CurrentTime current_time;
 
+
+    unsigned long long uptime_seconds;
     double cpu_usage;
 
     /*
@@ -110,6 +116,67 @@ int main(void)
             fprintf(stderr, "Failed to read disk information\n");
             return 1;
         }
+
+	/*
+	 * 读取系统启动后经过的总秒数。
+	 */
+	if (get_system_uptime(&uptime_seconds) != 0)
+	{
+	    fprintf(stderr, "Failed to read system uptime\n");
+	    return 1;
+	}
+
+	/*
+	 * 将总秒数转换成天、小时、分钟和秒。
+	 */
+	convert_uptime(
+	    uptime_seconds,
+	    &system_uptime
+	);
+
+	/*
+	 * 读取 1、5、15 分钟系统负载。
+	 */
+	if (get_load_average(&load_average) != 0)
+	{
+	    fprintf(stderr, "Failed to read load average\n");
+	    return 1;
+	}
+
+	/*
+	 * 获取当前系统本地时间。
+	 */
+	if (get_current_time(&current_time) != 0)
+	{
+	    fprintf(stderr, "Failed to get current time\n");
+	    return 1;
+	}
+
+	printf(
+	    "Updated:         %04d-%02d-%02d %02d:%02d:%02d\n",
+	    current_time.year,
+	    current_time.month,
+	    current_time.day,
+	    current_time.hour,
+	    current_time.minute,
+	    current_time.second
+	);
+
+	printf(
+	    "System Uptime:   %llu days %u hours "
+	    "%u minutes %u seconds\n",
+	    system_uptime.days,
+	    system_uptime.hours,
+	    system_uptime.minutes,
+	    system_uptime.seconds
+	);
+
+	printf(
+    	    "Load Average:    %.2f  %.2f  %.2f\n",
+    	    load_average.one_minute,
+    	    load_average.five_minutes,
+    	    load_average.fifteen_minutes
+	);
 
         printf("CPU Usage:       %6.2f%%\n",
                cpu_usage);
