@@ -6,6 +6,7 @@
 #include "alert.h"
 #include "cpu_monitor.h"
 #include "disk_monitor.h"
+#include "logger.h"
 #include "network.h"
 #include "system_monitor.h"
 #include "system_status.h"
@@ -20,6 +21,18 @@
  */
 #define BYTES_PER_MIB 1048576.0
 
+/*
+ * 日志目录和日志文件路径。
+ *
+ * 这里使用相对路径，因此程序从项目根目录运行时，
+ * 日志会保存到：
+ *
+ * EdgeSentinel-Linux/logs/edgesentinel.log
+ */
+#define LOG_DIRECTORY "logs"
+#define LOG_FILE_PATH "logs/edgesentinel.log"
+
+#define LOG_INTERVAL_SAMPLES 10U
 /*
  * 控制程序主循环。
  *
@@ -132,6 +145,20 @@ int main(void)
     AlertLevel disk_level;
     AlertLevel system_level;
 
+	/*
+	 * 保存上一次采样得到的系统状态，
+	 * 用于判断状态是否发生变化。
+	 */
+	AlertLevel previous_system_level;
+	
+	/*
+	 * 标记 previous_system_level 是否已经获得有效值。
+	 *
+	 * 0：还没有上一次状态
+	 * 1：已经保存了上一次状态
+	 */
+	int system_level_initialized = 0;
+
     /*
      * 系统启动后经过的总秒数。
      */
@@ -146,6 +173,14 @@ int main(void)
      * 两次网络采样之间经过的真实时间。
      */
     double network_elapsed_seconds;
+
+    char log_message[256];
+    int log_message_length;
+
+    /*
+     * 记录已经完成了多少次监控采样。 
+     */
+    unsigned int log_sample_counter = 0;
 
     /*
      * 配置 Ctrl+C 信号处理。
@@ -214,6 +249,31 @@ int main(void)
         ) != 0)
     {
         perror("clock_gettime");
+        return 1;
+    }
+
+    /*
+     * 创建日志目录。
+     *
+     * 如果 logs 目录已经存在，
+     * logger_init() 仍然会返回成功。
+     */
+    if (logger_init(LOG_DIRECTORY) != 0)
+    {
+        fprintf(stderr, "Failed to initialize log directory\n");
+        return 1;
+    }
+
+    /*
+     * 写入程序启动日志。
+     */
+    if (logger_write(
+           LOG_FILE_PATH,
+            "INFO",
+            "EdgeSentinel started"
+        ) != 0)
+    {
+        fprintf(stderr, "Failed to write startup log\n");
         return 1;
     }
 
@@ -471,6 +531,143 @@ int main(void)
             disk_level
         );
 
+	/*
+	 * 第一次采样时还没有上一次状态，
+	 * 因此只保存当前状态，不记录“状态变化”。
+	 */
+	if (!system_level_initialized)
+	{
+	    previous_system_level = system_level;
+	    system_level_initialized = 1;
+	}
+	/*
+	 * 从第二次采样开始，比较当前状态和上一次状态。
+	 */
+	else if (system_level != previous_system_level)
+	{
+	    /*
+	     * 生成状态变化日志。
+	     *
+	     * 例如：
+	     * System status changed: NORMAL -> WARNING
+	     */
+	    log_message_length = snprintf(
+	        log_message,
+	        sizeof(log_message),
+	        "System status changed: %s -> %s "
+	        "CPU=%.2f%% Memory=%.2f%% Disk=%.2f%%",
+	        alert_level_to_string(previous_system_level),
+	        alert_level_to_string(system_level),
+	        cpu_usage,
+	        memory_info.usage_percent,
+	        disk_info.usage_percent
+	    );
+	
+	    /*
+	     * snprintf() 返回负数表示格式化失败。
+	     *
+	     * 返回值大于或等于数组容量，
+	     * 表示字符串过长并被截断。
+	     */
+	    if (
+	        log_message_length < 0 ||
+	        (size_t)log_message_length >= sizeof(log_message)
+	    )
+	    {
+	        fprintf(
+	            stderr,
+	            "Failed to format status change log\n"
+	        );
+	
+	        return 1;
+	    }
+	
+	    /*
+	     * 状态变化时立即写日志。
+	     *
+	     * 当前状态同时作为日志等级。
+	     */
+	    if (
+	        logger_write(
+	            LOG_FILE_PATH,
+	            alert_level_to_string(system_level),
+	            log_message
+	        ) != 0
+	    )
+	    {
+	        fprintf(
+	            stderr,
+	            "Failed to write status change log\n"
+	        );
+	
+	        return 1;
+	    }
+	
+	    /*
+	     * 当前状态成为下一轮的上一次状态。
+	     */
+	    previous_system_level = system_level;
+	}
+
+	/*
+	 * 当前轮次完成一次采样，因此计数器加 1。
+	 */
+	log_sample_counter++;
+
+	/*
+	 * 只有累计达到规定次数时，
+	 * 才将本轮监控结果写入日志。
+	 */
+	if (log_sample_counter >= LOG_INTERVAL_SAMPLES)
+	{
+	    /*
+	     * 将 CPU、内存和磁盘数据组合成一条字符串。
+	     */
+	    if (
+	        snprintf(
+	            log_message,
+	            sizeof(log_message),
+	            "CPU=%.2f%% Memory=%.2f%% Disk=%.2f%%",
+	            cpu_usage,
+	            memory_info.usage_percent,
+	            disk_info.usage_percent
+	        ) < 0
+	    )
+	    {
+	        fprintf(
+	            stderr,	
+	            "Failed to format monitoring log\n"
+	        );
+
+	        return 1;
+	    }
+
+	    /*
+	     * 将格式化后的监控结果追加到日志文件。
+	     */
+	    if (
+	        logger_write(
+	            LOG_FILE_PATH,
+	            alert_level_to_string(system_level),
+	            log_message
+	        ) != 0
+	    )
+	    {
+	        fprintf(
+	            stderr,
+	            "Failed to write monitoring log\n"
+	        );
+
+	        return 1;
+	    }
+
+	    /*
+	     * 本次日志已经写入，
+	     * 将计数器清零并重新开始统计。
+	     */
+	    log_sample_counter = 0;
+	}
+
         /*
          * 读取系统启动后经过的总秒数。
          */
@@ -676,6 +873,16 @@ int main(void)
          */
         previous_network_time = current_network_time;
     }
+
+    if (logger_write(
+            LOG_FILE_PATH,
+            "INFO",
+            "EdgeSentinel stopped safely"
+        ) != 0)
+    {
+        fprintf(stderr, "Failed to write shutdown log\n");
+    }
+
 
     /*
      * 离开循环后进行安全退出提示。
