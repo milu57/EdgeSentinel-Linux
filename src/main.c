@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "alert.h"
 #include "cpu_monitor.h"
 #include "disk_monitor.h"
 #include "network.h"
@@ -26,19 +27,26 @@
  *     表示该变量可能被信号处理函数异步修改。
  *
  * sig_atomic_t：
- *     表示对该变量的读写可以安全地由信号处理函数完成。
+ *     表示该变量适合在信号处理函数中读写。
  */
 static volatile sig_atomic_t keep_running = 1;
 
 /*
  * Ctrl+C 对应 SIGINT 信号。
  *
- * 收到信号后不直接结束程序，
- * 而是把循环控制变量设置为0。
+ * 收到 Ctrl+C 后，不直接强制结束程序，
+ * 而是把 keep_running 设置为 0。
  */
 static void handle_sigint(int signal_number)
 {
+    /*
+     * 当前函数不需要使用信号编号。
+     *
+     * 这一行用于明确表示：
+     * 我们知道有这个参数，但这里故意不使用。
+     */
     (void)signal_number;
+
     keep_running = 0;
 }
 
@@ -53,8 +61,14 @@ static double calculate_elapsed_seconds(
     double seconds;
     double nanoseconds;
 
+    /*
+     * 计算整秒部分的差值。
+     */
     seconds = (double)(end->tv_sec - start->tv_sec);
 
+    /*
+     * 计算纳秒部分的差值，并转换成秒。
+     */
     nanoseconds =
         (double)(end->tv_nsec - start->tv_nsec)
         / 1000000000.0;
@@ -79,9 +93,13 @@ int main(void)
     NetworkInfo current_network;
 
     /*
-     * 网络实时速度及其显示形式。
+     * 网络实时速度。
      */
     NetworkSpeed network_speed;
+
+    /*
+     * 转换单位后的下载速度和上传速度。
+     */
     NetworkSpeedDisplay download_display;
     NetworkSpeedDisplay upload_display;
 
@@ -91,24 +109,62 @@ int main(void)
     struct timespec previous_network_time;
     struct timespec current_network_time;
 
+    /*
+     * 系统监控数据。
+     */
     MemoryInfo memory_info;
     DiskInfo disk_info;
     SystemUptime system_uptime;
     LoadAverage load_average;
     CurrentTime current_time;
 
+    /*
+     * 各项资源的告警等级。
+     *
+     * 每个变量在某一时刻只保存一个状态：
+     *
+     * ALERT_NORMAL
+     * ALERT_WARNING
+     * ALERT_CRITICAL
+     */
+    AlertLevel cpu_level;
+    AlertLevel memory_level;
+    AlertLevel disk_level;
+    AlertLevel system_level;
+
+    /*
+     * 系统启动后经过的总秒数。
+     */
     unsigned long long uptime_seconds;
 
+    /*
+     * CPU 使用率。
+     */
     double cpu_usage;
+
+    /*
+     * 两次网络采样之间经过的真实时间。
+     */
     double network_elapsed_seconds;
 
     /*
      * 配置 Ctrl+C 信号处理。
      */
     action.sa_handler = handle_sigint;
+
+    /*
+     * 清空信号屏蔽集合。
+     */
     sigemptyset(&action.sa_mask);
+
+    /*
+     * 当前不使用额外的 sigaction 标志。
+     */
     action.sa_flags = 0;
 
+    /*
+     * 将 handle_sigint 注册为 SIGINT 的处理函数。
+     */
     if (sigaction(SIGINT, &action, NULL) == -1)
     {
         perror("sigaction");
@@ -116,34 +172,41 @@ int main(void)
     }
 
     /*
-     * CPU 使用率需要两次采样。
+     * CPU 使用率需要比较前后两次累计 CPU 时间。
      *
-     * 启动时先读取第一次累计 CPU 时间，
-     * 作为后续计算的 previous_cpu。
+     * 程序启动时先读取第一次数据，
+     * 保存到 previous_cpu。
      */
     if (read_cpu_times(&previous_cpu) != 0)
     {
-        fprintf(stderr, "Failed to read initial CPU times\n");
+        fprintf(
+            stderr,
+            "Failed to read initial CPU times\n"
+        );
+
         return 1;
     }
 
     /*
-     * 实时网速也需要两次采样。
+     * 实时网速也需要比较前后两次累计流量。
      *
-     * 启动时先读取第一次累计网络流量，
-     * 作为后续计算的 previous_network。
+     * 程序启动时先读取第一次网络流量。
      */
     if (read_network_info(&previous_network) != 0)
     {
-        fprintf(stderr, "Failed to read initial network information\n");
+        fprintf(
+            stderr,
+            "Failed to read initial network information\n"
+        );
+
         return 1;
     }
 
     /*
-     * 记录第一次网络采样的时间。
+     * 记录第一次网络采样时间。
      *
-     * CLOCK_MONOTONIC 不会受到系统日期修改的影响，
-     * 适合计算两个采样点之间实际经过的时间。
+     * CLOCK_MONOTONIC 是单调时钟，
+     * 不会因为修改系统日期而突然向前或向后跳动。
      */
     if (clock_gettime(
             CLOCK_MONOTONIC,
@@ -156,18 +219,26 @@ int main(void)
 
     printf("EdgeSentinel system monitor started.\n");
     printf("Monitoring disk mount point: /\n");
-    printf("Monitoring all non-loopback network interfaces.\n");
+    printf(
+        "Monitoring all non-loopback network interfaces.\n"
+    );
     printf("Press Ctrl+C to stop.\n\n");
 
+    /*
+     * 只要 keep_running 不等于 0，
+     * 程序就持续进行监控。
+     */
     while (keep_running)
     {
         /*
-         * 每隔约1秒采样一次。
+         * 每隔约 1 秒采样一次。
          */
         sleep(1);
 
         /*
          * Ctrl+C 可能使 sleep 提前结束。
+         *
+         * 因此 sleep 返回后再次检查 keep_running。
          */
         if (!keep_running)
         {
@@ -179,7 +250,11 @@ int main(void)
          */
         if (read_cpu_times(&current_cpu) != 0)
         {
-            fprintf(stderr, "Failed to read current CPU times\n");
+            fprintf(
+                stderr,
+                "Failed to read current CPU times\n"
+            );
+
             return 1;
         }
 
@@ -191,18 +266,47 @@ int main(void)
             &current_cpu
         );
 
+        /*
+         * 小于 0 表示 CPU 使用率计算失败。
+         */
         if (cpu_usage < 0.0)
         {
-            fprintf(stderr, "Failed to calculate CPU usage\n");
+            fprintf(
+                stderr,
+                "Failed to calculate CPU usage\n"
+            );
+
             return 1;
         }
+
+        /*
+         * 判断 CPU 告警等级。
+         *
+         * CPU < 70%：
+         *     NORMAL
+         *
+         * 70% <= CPU < 90%：
+         *     WARNING
+         *
+         * CPU >= 90%：
+         *     CRITICAL
+         */
+        cpu_level = alert_evaluate_percentage(
+            cpu_usage,
+            70.0,
+            90.0
+        );
 
         /*
          * 读取当前累计网络流量。
          */
         if (read_network_info(&current_network) != 0)
         {
-            fprintf(stderr, "Failed to read current network information\n");
+            fprintf(
+                stderr,
+                "Failed to read current network information\n"
+            );
+
             return 1;
         }
 
@@ -219,7 +323,7 @@ int main(void)
         }
 
         /*
-         * 计算前后两次网络采样之间的真实时间差。
+         * 计算前后两次网络采样之间经过的真实时间。
          */
         network_elapsed_seconds =
             calculate_elapsed_seconds(
@@ -237,31 +341,49 @@ int main(void)
                 &network_speed
             ) != 0)
         {
-            fprintf(stderr, "Failed to calculate network speed\n");
+            fprintf(
+                stderr,
+                "Failed to calculate network speed\n"
+            );
+
             return 1;
         }
 
         /*
-         * 自动选择下载速度的显示单位。
+         * 自动选择下载速度显示单位。
+         *
+         * 例如：
+         *
+         * B/s
+         * KiB/s
+         * MiB/s
          */
         if (convert_network_speed(
                 network_speed.download_bytes_per_sec,
                 &download_display
             ) != 0)
         {
-            fprintf(stderr, "Failed to convert download speed\n");
+            fprintf(
+                stderr,
+                "Failed to convert download speed\n"
+            );
+
             return 1;
         }
 
         /*
-         * 自动选择上传速度的显示单位。
+         * 自动选择上传速度显示单位。
          */
         if (convert_network_speed(
                 network_speed.upload_bytes_per_sec,
                 &upload_display
             ) != 0)
         {
-            fprintf(stderr, "Failed to convert upload speed\n");
+            fprintf(
+                stderr,
+                "Failed to convert upload speed\n"
+            );
+
             return 1;
         }
 
@@ -270,30 +392,105 @@ int main(void)
          */
         if (get_memory_info(&memory_info) != 0)
         {
-            fprintf(stderr, "Failed to read memory information\n");
+            fprintf(
+                stderr,
+                "Failed to read memory information\n"
+            );
+
             return 1;
         }
+
+        /*
+         * 判断内存告警等级。
+         *
+         * 内存 < 75%：
+         *     NORMAL
+         *
+         * 75% <= 内存 < 90%：
+         *     WARNING
+         *
+         * 内存 >= 90%：
+         *     CRITICAL
+         */
+        memory_level = alert_evaluate_percentage(
+            memory_info.usage_percent,
+            75.0,
+            90.0
+        );
 
         /*
          * 读取根文件系统 / 的磁盘信息。
          */
         if (get_disk_info("/", &disk_info) != 0)
         {
-            fprintf(stderr, "Failed to read disk information\n");
+            fprintf(
+                stderr,
+                "Failed to read disk information\n"
+            );
+
             return 1;
         }
+
+        /*
+         * 判断磁盘告警等级。
+         *
+         * 磁盘 < 80%：
+         *     NORMAL
+         *
+         * 80% <= 磁盘 < 90%：
+         *     WARNING
+         *
+         * 磁盘 >= 90%：
+         *     CRITICAL
+         */
+        disk_level = alert_evaluate_percentage(
+            disk_info.usage_percent,
+            80.0,
+            90.0
+        );
+
+        /*
+         * 计算整个系统的统一告警状态。
+         *
+         * 第一次：
+         * 比较 CPU 和内存，得到两者中更严重的状态。
+         */
+        system_level = alert_get_higher_level(
+            cpu_level,
+            memory_level
+        );
+
+        /*
+         * 第二次：
+         * 将上一步结果与磁盘状态比较。
+         *
+         * 最终 system_level 就是三个资源中最严重的状态。
+         */
+        system_level = alert_get_higher_level(
+            system_level,
+            disk_level
+        );
 
         /*
          * 读取系统启动后经过的总秒数。
          */
         if (get_system_uptime(&uptime_seconds) != 0)
         {
-            fprintf(stderr, "Failed to read system uptime\n");
+            fprintf(
+                stderr,
+                "Failed to read system uptime\n"
+            );
+
             return 1;
         }
 
         /*
-         * 将总秒数转换成天、小时、分钟和秒。
+         * 将总秒数转换成：
+         *
+         * 天
+         * 小时
+         * 分钟
+         * 秒
          */
         convert_uptime(
             uptime_seconds,
@@ -301,11 +498,15 @@ int main(void)
         );
 
         /*
-         * 读取1、5、15分钟系统负载。
+         * 读取 1、5、15 分钟系统负载。
          */
         if (get_load_average(&load_average) != 0)
         {
-            fprintf(stderr, "Failed to read load average\n");
+            fprintf(
+                stderr,
+                "Failed to read load average\n"
+            );
+
             return 1;
         }
 
@@ -314,12 +515,20 @@ int main(void)
          */
         if (get_current_time(&current_time) != 0)
         {
-            fprintf(stderr, "Failed to get current time\n");
+            fprintf(
+                stderr,
+                "Failed to get current time\n"
+            );
+
             return 1;
         }
 
+        /*
+         * 输出当前时间。
+         */
         printf(
-            "Updated:          %04d-%02d-%02d %02d:%02d:%02d\n",
+            "Updated:          "
+            "%04d-%02d-%02d %02d:%02d:%02d\n",
             current_time.year,
             current_time.month,
             current_time.day,
@@ -328,15 +537,21 @@ int main(void)
             current_time.second
         );
 
+        /*
+         * 输出系统运行时间。
+         */
         printf(
-            "System Uptime:    %llu days %u hours "
-            "%u minutes %u seconds\n",
+            "System Uptime:    "
+            "%llu days %u hours %u minutes %u seconds\n",
             system_uptime.days,
             system_uptime.hours,
             system_uptime.minutes,
             system_uptime.seconds
         );
 
+        /*
+         * 输出 1、5、15 分钟平均负载。
+         */
         printf(
             "Load Average:     %.2f  %.2f  %.2f\n",
             load_average.one_minute,
@@ -344,39 +559,69 @@ int main(void)
             load_average.fifteen_minutes
         );
 
+        /*
+         * 输出 CPU 使用率及其告警状态。
+         */
         printf(
-            "CPU Usage:        %6.2f%%\n",
-            cpu_usage
+            "CPU Usage:        %6.2f%% [%s]\n",
+            cpu_usage,
+            alert_level_to_string(cpu_level)
         );
 
+        /*
+         * 输出内存使用率及其告警状态。
+         */
         printf(
-            "Memory Usage:     %6.2f%%\n",
-            memory_info.usage_percent
+            "Memory Usage:     %6.2f%% [%s]\n",
+            memory_info.usage_percent,
+            alert_level_to_string(memory_level)
         );
 
+        /*
+         * 输出磁盘使用率及其告警状态。
+         */
         printf(
-            "Disk Usage:       %6.2f%%\n",
-            disk_info.usage_percent
+            "Disk Usage:       %6.2f%% [%s]\n",
+            disk_info.usage_percent,
+            alert_level_to_string(disk_level)
         );
 
+        /*
+         * 输出整个系统的统一告警状态。
+         */
+        printf(
+            "System Status:           [%s]\n",
+            alert_level_to_string(system_level)
+        );
+
+        /*
+         * 输出磁盘总容量。
+         */
         printf(
             "Disk Total:       %6.2f GiB\n",
             disk_info.total_bytes / BYTES_PER_GIB
         );
 
+        /*
+         * 输出磁盘已使用容量。
+         */
         printf(
             "Disk Used:        %6.2f GiB\n",
             disk_info.used_bytes / BYTES_PER_GIB
         );
 
+        /*
+         * 输出磁盘可用容量。
+         */
         printf(
             "Disk Available:   %6.2f GiB\n",
             disk_info.available_bytes / BYTES_PER_GIB
         );
 
         /*
-         * rx 表示 Receive，即累计接收流量。
-         * 接收流量对应通常所说的下载流量。
+         * RX 表示 Receive，即累计接收流量。
+         *
+         * 接收流量通常对应下载流量。
          */
         printf(
             "Network RX Total: %8.2f MiB\n",
@@ -384,26 +629,36 @@ int main(void)
         );
 
         /*
-         * tx 表示 Transmit，即累计发送流量。
-         * 发送流量对应通常所说的上传流量。
+         * TX 表示 Transmit，即累计发送流量。
+         *
+         * 发送流量通常对应上传流量。
          */
         printf(
             "Network TX Total: %8.2f MiB\n",
             current_network.tx_bytes / BYTES_PER_MIB
         );
 
+        /*
+         * 输出实时下载速度。
+         */
         printf(
             "Download Speed:   %8.2f %-4s\n",
             download_display.value,
             download_display.unit
         );
 
+        /*
+         * 输出实时上传速度。
+         */
         printf(
             "Upload Speed:     %8.2f %-4s\n",
             upload_display.value,
             upload_display.unit
         );
 
+        /*
+         * 分隔不同采样周期的输出。
+         */
         printf("---------------------------------\n");
 
         /*
@@ -412,12 +667,19 @@ int main(void)
         previous_cpu = current_cpu;
 
         /*
-         * 当前网络流量和时间成为下一轮的前一次采样。
+         * 当前网络累计流量成为下一轮的前一次采样。
          */
         previous_network = current_network;
+
+        /*
+         * 当前网络采样时间成为下一轮的前一次时间。
+         */
         previous_network_time = current_network_time;
     }
 
+    /*
+     * 离开循环后进行安全退出提示。
+     */
     printf("\nEdgeSentinel stopped safely.\n");
 
     return 0;
