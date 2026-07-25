@@ -1,38 +1,56 @@
 # EdgeSentinel-Linux
 
-EdgeSentinel-Linux 是一个面向 Linux 边缘设备的系统状态监测、异常判断与告警项目。
+EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统资源监控程序。
 
-项目将从基础的 Linux 系统资源监测开始，逐步加入配置管理、日志记录、多线程、网络通信、嵌入式 Linux 开发板移植、传感器接入以及边缘 AI 推理功能。
+项目通过 Linux 系统接口采集 CPU、内存、磁盘、网络和系统运行状态，并根据配置的告警阈值输出 NORMAL、WARNING 或 CRITICAL 状态。同时支持日志记录、日志轮转和外部配置文件。
 
-本项目主要用于学习和实践 C 语言、Linux 应用开发、系统编程、网络编程、嵌入式 Linux 和边缘 AI，并作为个人求职项目持续维护。
+## 当前版本
 
----
+v0.9.0
 
-## 项目状态
+## 功能
 
-当前版本：`v0.6.0`
+- 系统运行时间监控
+- 系统负载监控
+- CPU 使用率监控
+- 内存使用率监控
+- 磁盘使用率监控
+- 网络流量与实时网速监控
+- CPU、内存和磁盘告警分级
+- 综合系统状态判断
+- 程序启动、状态变化和退出日志
+- 日志文件自动轮转
+- 外部配置文件支持
+- 配置格式和数值合法性校验
+- 配置错误时自动回退到默认值
+- Ctrl+C 安全退出
 
-当前阶段：Linux 系统资源与网络状态实时监控。
+## 项目结构
 
-目前已经完成：
-
-- Linux 内存使用率监测
-- CPU 使用率监测
-- 根文件系统磁盘使用率监测
-- 系统运行时间监测
-- 1、5、15 分钟系统负载监测
-- 当前本地时间显示
-- 网络累计接收与发送流量监测
-- 实时下载与上传速度计算
-- B/s、KB/s、MB/s、GB/s 自动单位转换
-- 每秒周期性采样
-- `Ctrl+C` 信号处理与安全退出
-- 多文件 C 工程结构
-- Makefile 自动构建
-
-下一阶段计划：
-
-- 资源阈值配置
-- CPU、内存、磁盘和网络异常判断
-- 统一系统健康状态
-- 本地告警信息输出
+```text
+EdgeSentinel-Linux/
+├── CMakeLists.txt
+├── README.md
+├── .gitignore
+├── config/
+│   └── edgesentinel.conf
+├── include/
+│   ├── alert.h
+│   ├── config.h
+│   ├── cpu_monitor.h
+│   ├── disk_monitor.h
+│   ├── logger.h
+│   ├── network.h
+│   ├── system_monitor.h
+│   └── system_status.h
+├── src/
+│   ├── alert.c
+│   ├── config.c
+│   ├── cpu_monitor.c
+│   ├── disk_monitor.c
+│   ├── logger.c
+│   ├── main.c
+│   ├── network.c
+│   ├── system_monitor.c
+│   └── system_status.c
+└── build/

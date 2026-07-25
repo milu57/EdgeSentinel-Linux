@@ -3,6 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "alert.h"
 #include "cpu_monitor.h"
 #include "disk_monitor.h"
@@ -29,8 +30,7 @@
  *
  * EdgeSentinel-Linux/logs/edgesentinel.log
  */
-#define LOG_DIRECTORY "logs"
-#define LOG_FILE_PATH "logs/edgesentinel.log"
+
 
 #define LOG_INTERVAL_SAMPLES 10U
 /*
@@ -91,6 +91,57 @@ static double calculate_elapsed_seconds(
 
 int main(void)
 {
+
+    AppConfig config;
+
+    /*
+     * 第一步：先写入默认值。
+     */
+    config_set_defaults(&config);
+
+        if (
+        logger_init(
+            config.log_file,
+            config.log_max_size
+        ) != 0
+    )
+    {
+        fprintf(
+            stderr,
+            "Failed to initialize logger: %s\n",
+            config.log_file
+        );
+
+        return 1;
+    }
+    /*
+     * 第二步：读取配置文件。
+     * 配置文件中存在的参数会覆盖默认值。
+     */
+    if (config_load("config/edgesentinel.conf", &config) != 0) {
+        fprintf(
+            stderr,
+            "Warning: failed to load or parse configuration file, "
+            "using default configuration.\n"
+        );
+    }
+
+    if (config_validate(&config) != 0)
+    {
+        fprintf(
+            stderr,
+            "Warning: invalid configuration, "
+            "using default configuration.\n"
+        );
+
+        config_set_defaults(&config);
+    }
+
+    /*
+     * 暂时打印最终生效的配置，验证读取是否成功。
+     */
+    config_print(&config);
+
     struct sigaction action;
 
     /*
@@ -258,9 +309,19 @@ int main(void)
      * 如果 logs 目录已经存在，
      * logger_init() 仍然会返回成功。
      */
-    if (logger_init(LOG_DIRECTORY) != 0)
+    if (
+        logger_init(
+            config.log_file,
+            config.log_max_size
+        ) != 0
+    )
     {
-        fprintf(stderr, "Failed to initialize log directory\n");
+        fprintf(
+            stderr,
+            "Failed to initialize logger: %s\n",
+            config.log_file
+        );
+    
         return 1;
     }
 
@@ -268,7 +329,7 @@ int main(void)
      * 写入程序启动日志。
      */
     if (logger_write(
-           LOG_FILE_PATH,
+           config.log_file,
             "INFO",
             "EdgeSentinel started"
         ) != 0)
@@ -293,7 +354,7 @@ int main(void)
         /*
          * 每隔约 1 秒采样一次。
          */
-        sleep(1);
+        sleep(config.monitor_interval);
 
         /*
          * Ctrl+C 可能使 sleep 提前结束。
@@ -339,23 +400,11 @@ int main(void)
             return 1;
         }
 
-        /*
-         * 判断 CPU 告警等级。
-         *
-         * CPU < 70%：
-         *     NORMAL
-         *
-         * 70% <= CPU < 90%：
-         *     WARNING
-         *
-         * CPU >= 90%：
-         *     CRITICAL
-         */
         cpu_level = alert_evaluate_percentage(
-            cpu_usage,
-            70.0,
-            90.0
-        );
+	    cpu_usage,
+	    config.cpu_warning_threshold,
+	    config.cpu_critical_threshold
+	);
 
         /*
          * 读取当前累计网络流量。
@@ -431,6 +480,7 @@ int main(void)
             return 1;
         }
 
+
         /*
          * 自动选择上传速度显示单位。
          */
@@ -460,23 +510,11 @@ int main(void)
             return 1;
         }
 
-        /*
-         * 判断内存告警等级。
-         *
-         * 内存 < 75%：
-         *     NORMAL
-         *
-         * 75% <= 内存 < 90%：
-         *     WARNING
-         *
-         * 内存 >= 90%：
-         *     CRITICAL
-         */
         memory_level = alert_evaluate_percentage(
-            memory_info.usage_percent,
-            75.0,
-            90.0
-        );
+	    memory_info.usage_percent,
+	    config.memory_warning_threshold,
+	    config.memory_critical_threshold
+	);
 
         /*
          * 读取根文件系统 / 的磁盘信息。
@@ -491,23 +529,11 @@ int main(void)
             return 1;
         }
 
-        /*
-         * 判断磁盘告警等级。
-         *
-         * 磁盘 < 80%：
-         *     NORMAL
-         *
-         * 80% <= 磁盘 < 90%：
-         *     WARNING
-         *
-         * 磁盘 >= 90%：
-         *     CRITICAL
-         */
         disk_level = alert_evaluate_percentage(
-            disk_info.usage_percent,
-            80.0,
-            90.0
-        );
+	    disk_info.usage_percent,
+	    config.disk_warning_threshold,
+	    config.disk_critical_threshold
+	);
 
         /*
          * 计算整个系统的统一告警状态。
@@ -589,7 +615,7 @@ int main(void)
 	     */
 	    if (
 	        logger_write(
-	            LOG_FILE_PATH,
+	            config.log_file,
 	            alert_level_to_string(system_level),
 	            log_message
 	        ) != 0
@@ -647,7 +673,7 @@ int main(void)
 	     */
 	    if (
 	        logger_write(
-	            LOG_FILE_PATH,
+	            config.log_file,
 	            alert_level_to_string(system_level),
 	            log_message
 	        ) != 0
@@ -875,7 +901,7 @@ int main(void)
     }
 
     if (logger_write(
-            LOG_FILE_PATH,
+            config.log_file,
             "INFO",
             "EdgeSentinel stopped safely"
         ) != 0)
