@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -21,6 +22,14 @@
  * 1 MiB = 1024 × 1024 字节。
  */
 #define BYTES_PER_MIB 1048576.0
+
+/*
+ * 默认配置文件路径。
+ *
+ * 用户没有通过 -c 指定配置文件时，
+ * 程序使用该路径。
+ */
+#define DEFAULT_CONFIG_FILE "config/edgesentinel.conf"
 
 /*
  * 日志目录和日志文件路径。
@@ -89,36 +98,55 @@ static double calculate_elapsed_seconds(
     return seconds + nanoseconds;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    /*
+     * 当前准备读取的配置文件路径。
+     *
+     * 默认指向项目内的配置文件。
+     */
+    const char *config_file = DEFAULT_CONFIG_FILE;
 
     AppConfig config;
+
+    /*
+     * 不带参数：
+     *
+     *     ./edgesentinel
+     *
+     * 使用默认配置文件。
+     *
+     * 带两个参数：
+     *
+     *     ./edgesentinel -c 配置文件路径
+     *
+     * 使用用户指定的配置文件。
+     */
+    if (argc == 3 && strcmp(argv[1], "-c") == 0)
+    {
+        config_file = argv[2];
+    }
+    else if (argc != 1)
+    {
+        fprintf(
+            stderr,
+            "Usage: %s [-c config_file]\n",
+            argv[0]
+        );
+
+        return 1;
+    }
 
     /*
      * 第一步：先写入默认值。
      */
     config_set_defaults(&config);
 
-        if (
-        logger_init(
-            config.log_file,
-            config.log_max_size
-        ) != 0
-    )
-    {
-        fprintf(
-            stderr,
-            "Failed to initialize logger: %s\n",
-            config.log_file
-        );
-
-        return 1;
-    }
     /*
      * 第二步：读取配置文件。
      * 配置文件中存在的参数会覆盖默认值。
      */
-    if (config_load("config/edgesentinel.conf", &config) != 0) {
+    if (config_load(config_file, &config) != 0) {
         fprintf(
             stderr,
             "Warning: failed to load or parse configuration file, "
@@ -140,6 +168,8 @@ int main(void)
     /*
      * 暂时打印最终生效的配置，验证读取是否成功。
      */
+
+    printf("Configuration file: %s\n", config_file);
     config_print(&config);
 
     struct sigaction action;
