@@ -1,0 +1,16 @@
+[Unit]
+Description=EdgeSentinel Linux System Monitor
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/edgesentinel -c /etc/edgesentinel/edgesentinel.conf
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
