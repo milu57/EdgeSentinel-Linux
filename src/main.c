@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -21,6 +22,14 @@
  * 1 MiB = 1024 × 1024 字节。
  */
 #define BYTES_PER_MIB 1048576.0
+
+/*
+ * 默认配置文件路径。
+ *
+ * 用户没有通过 -c 指定配置文件时，
+ * 程序使用该路径。
+ */
+#define DEFAULT_CONFIG_FILE "config/edgesentinel.conf"
 
 /*
  * 日志目录和日志文件路径。
@@ -45,18 +54,23 @@
 static volatile sig_atomic_t keep_running = 1;
 
 /*
- * Ctrl+C 对应 SIGINT 信号。
+ * 处理程序停止信号。
  *
- * 收到 Ctrl+C 后，不直接强制结束程序，
- * 而是把 keep_running 设置为 0。
+ * SIGINT：
+ *     用户在终端按 Ctrl+C 时产生。
+ *
+ * SIGTERM：
+ *     systemd 停止服务时默认发送。
+ *
+ * 收到停止信号后不直接执行复杂清理，
+ * 只把 keep_running 设置为 0。
+ * 主循环随后自然结束，并执行退出前的清理工作。
  */
-static void handle_sigint(int signal_number)
+static void handle_stop_signal(int signal_number)
 {
     /*
-     * 当前函数不需要使用信号编号。
-     *
-     * 这一行用于明确表示：
-     * 我们知道有这个参数，但这里故意不使用。
+     * 当前不需要区分具体收到的是
+     * SIGINT 还是 SIGTERM。
      */
     (void)signal_number;
 
@@ -89,36 +103,55 @@ static double calculate_elapsed_seconds(
     return seconds + nanoseconds;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
+    /*
+     * 当前准备读取的配置文件路径。
+     *
+     * 默认指向项目内的配置文件。
+     */
+    const char *config_file = DEFAULT_CONFIG_FILE;
 
     AppConfig config;
+
+    /*
+     * 不带参数：
+     *
+     *     ./edgesentinel
+     *
+     * 使用默认配置文件。
+     *
+     * 带两个参数：
+     *
+     *     ./edgesentinel -c 配置文件路径
+     *
+     * 使用用户指定的配置文件。
+     */
+    if (argc == 3 && strcmp(argv[1], "-c") == 0)
+    {
+        config_file = argv[2];
+    }
+    else if (argc != 1)
+    {
+        fprintf(
+            stderr,
+            "Usage: %s [-c config_file]\n",
+            argv[0]
+        );
+
+        return 1;
+    }
 
     /*
      * 第一步：先写入默认值。
      */
     config_set_defaults(&config);
 
-        if (
-        logger_init(
-            config.log_file,
-            config.log_max_size
-        ) != 0
-    )
-    {
-        fprintf(
-            stderr,
-            "Failed to initialize logger: %s\n",
-            config.log_file
-        );
-
-        return 1;
-    }
     /*
      * 第二步：读取配置文件。
      * 配置文件中存在的参数会覆盖默认值。
      */
-    if (config_load("config/edgesentinel.conf", &config) != 0) {
+    if (config_load(config_file, &config) != 0) {
         fprintf(
             stderr,
             "Warning: failed to load or parse configuration file, "
@@ -140,6 +173,8 @@ int main(void)
     /*
      * 暂时打印最终生效的配置，验证读取是否成功。
      */
+
+    printf("Configuration file: %s\n", config_file);
     config_print(&config);
 
     struct sigaction action;
@@ -236,7 +271,7 @@ int main(void)
     /*
      * 配置 Ctrl+C 信号处理。
      */
-    action.sa_handler = handle_sigint;
+    action.sa_handler = handle_stop_signal;
 
     /*
      * 清空信号屏蔽集合。
@@ -249,11 +284,26 @@ int main(void)
     action.sa_flags = 0;
 
     /*
-     * 将 handle_sigint 注册为 SIGINT 的处理函数。
+     * 注册 SIGINT。
+     *
+     * 用户在终端按 Ctrl+C 时，
+     * 调用 handle_stop_signal()。
      */
     if (sigaction(SIGINT, &action, NULL) == -1)
     {
-        perror("sigaction");
+        perror("sigaction SIGINT");
+        return 1;
+    }
+
+    /*
+     * 注册 SIGTERM。
+     *
+     * systemd 执行 stop 操作时，
+     * 默认向服务发送 SIGTERM。
+     */
+    if (sigaction(SIGTERM, &action, NULL) == -1)
+    {
+        perror("sigaction SIGTERM");
         return 1;
     }
 
