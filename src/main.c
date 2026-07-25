@@ -54,18 +54,23 @@
 static volatile sig_atomic_t keep_running = 1;
 
 /*
- * Ctrl+C 对应 SIGINT 信号。
+ * 处理程序停止信号。
  *
- * 收到 Ctrl+C 后，不直接强制结束程序，
- * 而是把 keep_running 设置为 0。
+ * SIGINT：
+ *     用户在终端按 Ctrl+C 时产生。
+ *
+ * SIGTERM：
+ *     systemd 停止服务时默认发送。
+ *
+ * 收到停止信号后不直接执行复杂清理，
+ * 只把 keep_running 设置为 0。
+ * 主循环随后自然结束，并执行退出前的清理工作。
  */
-static void handle_sigint(int signal_number)
+static void handle_stop_signal(int signal_number)
 {
     /*
-     * 当前函数不需要使用信号编号。
-     *
-     * 这一行用于明确表示：
-     * 我们知道有这个参数，但这里故意不使用。
+     * 当前不需要区分具体收到的是
+     * SIGINT 还是 SIGTERM。
      */
     (void)signal_number;
 
@@ -266,7 +271,7 @@ int main(int argc, char *argv[])
     /*
      * 配置 Ctrl+C 信号处理。
      */
-    action.sa_handler = handle_sigint;
+    action.sa_handler = handle_stop_signal;
 
     /*
      * 清空信号屏蔽集合。
@@ -279,11 +284,26 @@ int main(int argc, char *argv[])
     action.sa_flags = 0;
 
     /*
-     * 将 handle_sigint 注册为 SIGINT 的处理函数。
+     * 注册 SIGINT。
+     *
+     * 用户在终端按 Ctrl+C 时，
+     * 调用 handle_stop_signal()。
      */
     if (sigaction(SIGINT, &action, NULL) == -1)
     {
-        perror("sigaction");
+        perror("sigaction SIGINT");
+        return 1;
+    }
+
+    /*
+     * 注册 SIGTERM。
+     *
+     * systemd 执行 stop 操作时，
+     * 默认向服务发送 SIGTERM。
+     */
+    if (sigaction(SIGTERM, &action, NULL) == -1)
+    {
+        perror("sigaction SIGTERM");
         return 1;
     }
 
