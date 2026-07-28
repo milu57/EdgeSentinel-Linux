@@ -10,6 +10,7 @@
 #include "disk_monitor.h"
 #include "logger.h"
 #include "network.h"
+#include "process_monitor.h"
 #include "system_monitor.h"
 #include "system_status.h"
 
@@ -115,6 +116,17 @@ int main(int argc, char *argv[])
     AppConfig config;
 
     /*
+     * 实际要监控的目标进程 PID。
+     *
+     * config.process_pid 为 0 时：
+     *     保存 EdgeSentinel 自身 PID。
+     *
+     * config.process_pid 大于 0 时：
+     *     保存配置文件指定的 PID。
+     */
+    int monitored_process_pid;
+
+    /*
      * 不带参数：
      *
      *     ./edgesentinel
@@ -171,6 +183,21 @@ int main(int argc, char *argv[])
     }
 
     /*
+     * 确定实际要监控的进程。
+     *
+     * process_pid == 0：
+     *     监控 EdgeSentinel 自身。
+     *
+     * process_pid > 0：
+     *     监控配置文件指定的进程。
+     */
+    if (config.process_pid == 0) {
+        monitored_process_pid = (int)getpid();
+    } else {
+        monitored_process_pid = (int)config.process_pid;
+    }
+
+    /*
      * 暂时打印最终生效的配置，验证读取是否成功。
      */
 
@@ -217,6 +244,67 @@ int main(int argc, char *argv[])
     LoadAverage load_average;
     CurrentTime current_time;
 
+    ProcessInfo process_info;
+
+    /*
+     * 目标进程前后两次累计 CPU 时间。
+     */
+    ProcessCpuTimes previous_process_cpu_times;
+    ProcessCpuTimes current_process_cpu_times;
+
+    /*
+     * 两次进程 CPU 采样对应的实际时间。
+     */
+    struct timespec previous_process_cpu_time;
+    struct timespec current_process_cpu_time;
+
+    /*
+     * 两次采样之间经过的实际秒数。
+     */
+    double process_elapsed_seconds;
+
+    /*
+     * 目标进程的 CPU 使用率。
+     *
+     * 100% 约等于占满一个 CPU 核心。
+     */
+    double process_cpu_usage = 0.0;
+
+    /*
+     * 是否已经保存了第一次进程 CPU 采样。
+     *
+     * 0：尚未保存；
+     * 1：已经保存。
+     */
+    int process_cpu_sample_initialized = 0;
+
+    /*
+     * 当前这一轮计算出的 CPU 使用率是否有效。
+     */
+    int process_cpu_usage_valid = 0;
+
+    /*
+     * 标记目标进程当前是否存在并且能够读取。
+     *
+     * 1：目标进程可用
+     * 0：目标进程不可用
+     */
+    int process_available;
+
+    /*
+     * 保存上一次采样时，目标进程是否可用。
+    */
+    int previous_process_available;
+    
+    /*
+     * 标记 previous_process_available
+     * 是否已经获得第一次有效结果。
+     *
+     * 0：还没有上一次状态
+     * 1：已经有上一次状态
+     */
+    int process_availability_initialized = 0;
+
     /*
      * 各项资源的告警等级。
      *
@@ -230,6 +318,16 @@ int main(int argc, char *argv[])
     AlertLevel memory_level;
     AlertLevel disk_level;
     AlertLevel system_level;
+    AlertLevel process_cpu_level;
+    AlertLevel previous_process_cpu_level;
+    /*
+     * 标记是否已经获得第一次有效的
+     * 进程 CPU 告警等级。
+     *
+     * 0：还没有基准状态；
+     * 1：已经保存了基准状态。
+     */
+    int process_cpu_level_initialized = 0;
 
 	/*
 	 * 保存上一次采样得到的系统状态，
@@ -389,6 +487,13 @@ int main(int argc, char *argv[])
     }
 
     printf("EdgeSentinel system monitor started.\n");
+    
+    printf(
+        "Monitoring process PID: %d%s\n",
+        monitored_process_pid,
+        config.process_pid == 0 ? " (self)" : ""
+    );
+
     printf("Monitoring disk mount point: /\n");
     printf(
         "Monitoring all non-loopback network interfaces.\n"
@@ -415,6 +520,300 @@ int main(int argc, char *argv[])
         {
             break;
         }
+
+	/*
+	 * 读取目标进程的信息。
+	 */
+	if (
+	    read_process_info(
+	        monitored_process_pid,
+	        &process_info
+	    ) != 0
+	)
+	{
+	    process_available = 0;
+	}
+	else
+	{
+	    process_available = 1;
+	}
+
+
+    /*
+     * 每轮开始时，先认为本轮没有计算出有效 CPU 使用率。
+     */
+    process_cpu_usage_valid = 0;
+
+    /*
+     * 只有目标进程可用时，才读取它的累计 CPU 时间。
+     */
+    if (process_available)
+    {
+        if (
+            read_process_cpu_times(
+                monitored_process_pid,
+                &current_process_cpu_times
+            ) != 0
+        )
+        {
+            /*
+             * 进程可能刚好在读取期间退出。
+             * 清除原有采样基准。
+             */
+            process_cpu_sample_initialized = 0;
+            process_cpu_level_initialized = 0;
+        }
+        else
+        {
+            /*
+             * 记录本次进程 CPU 采样时间。
+             */
+            if (
+                clock_gettime(
+                    CLOCK_MONOTONIC,
+                    &current_process_cpu_time
+                ) != 0
+            )
+            {
+                perror("clock_gettime");
+                return 1;
+            }
+
+            /*
+             * 第一次采样只能保存基准，
+             * 暂时不能计算 CPU 使用率。
+             */
+            if (!process_cpu_sample_initialized)
+            {
+                previous_process_cpu_times =
+                    current_process_cpu_times;
+
+                previous_process_cpu_time =
+                    current_process_cpu_time;
+
+                process_cpu_sample_initialized = 1;
+            }
+            else
+            {
+                /*
+                 * 计算前后两次采样之间经过的时间。
+                 */
+                process_elapsed_seconds =
+                    calculate_elapsed_seconds(
+                        &previous_process_cpu_time,
+                        &current_process_cpu_time
+                    );
+
+                /*
+                 * 计算目标进程 CPU 使用率。
+                 */
+                process_cpu_usage =
+                calculate_process_cpu_usage(
+                    &previous_process_cpu_times,
+                    &current_process_cpu_times,
+                    process_elapsed_seconds
+                );
+
+            if (process_cpu_usage >= 0.0)
+            {
+                /*
+                 * 本轮已经得到了有效的进程 CPU 使用率。
+                 */
+                process_cpu_usage_valid = 1;
+
+                /*
+                 * 根据配置文件中的进程 CPU 阈值，
+                 * 判断告警等级。
+                 */
+                process_cpu_level =
+                    alert_evaluate_percentage(
+                        process_cpu_usage,
+                        config.process_cpu_warning_threshold,
+                        config.process_cpu_critical_threshold
+                    );
+
+                /*
+                 * 第一次获得有效的进程 CPU 告警等级时，
+                 * 只保存基准，不记录“状态变化”。
+                 */
+                if (!process_cpu_level_initialized)
+                {
+                    previous_process_cpu_level = process_cpu_level;
+                    process_cpu_level_initialized = 1;
+                }
+                /*
+                 * 从第二次有效采样开始，
+                 * 判断告警等级是否发生变化。
+                 */
+                else if (process_cpu_level != previous_process_cpu_level)
+                {
+                    log_message_length = snprintf(
+                        log_message,
+                        sizeof(log_message),
+                        "Process CPU status changed: "
+                        "%s -> %s "
+                        "PID=%d CPU=%.2f%%",
+                        alert_level_to_string(previous_process_cpu_level),
+                        alert_level_to_string(process_cpu_level),
+                        monitored_process_pid,
+                        process_cpu_usage
+                    );
+
+                    /*
+                     * 检查日志格式化是否失败或被截断。
+                     */
+                    if (
+                        log_message_length < 0 ||
+                        (size_t)log_message_length >= sizeof(log_message)
+                    )
+                    {
+                        fprintf(
+                            stderr,
+                            "Failed to format process CPU status log\n"
+                        );
+
+                        return 1;
+                    }
+
+                    /*
+                     * 使用当前告警等级作为日志等级。
+                     */
+                    if (
+                        logger_write(
+                            config.log_file,
+                            alert_level_to_string(process_cpu_level),
+                            log_message
+                        ) != 0
+                    )
+                    {
+                        fprintf(
+                            stderr,
+                            "Failed to write process CPU status log\n"
+                        );
+
+                        return 1;
+                    }
+
+                    /*
+                     * 当前等级成为下一轮比较时的上一次等级。
+                     */
+                    previous_process_cpu_level = process_cpu_level;
+                }
+
+            }
+
+
+                /*
+                 * 当前采样成为下一轮的基准。
+                 */
+                previous_process_cpu_times =
+                    current_process_cpu_times;
+
+                previous_process_cpu_time =
+                    current_process_cpu_time;
+            }
+        }
+    }
+    else
+    {
+        /*
+         * 进程不可用后，旧的累计值不能继续使用。
+         */
+        process_cpu_sample_initialized = 0;
+        process_cpu_level_initialized = 0;
+    }
+
+	/*
+	 * 第一次采样时还没有“上一次状态”，
+	 * 因此只保存当前结果，不记录状态变化日志。
+	 */
+	if (!process_availability_initialized)
+	{
+	    previous_process_available = process_available;
+	    process_availability_initialized = 1;
+	}
+	/*
+	 * 从第二次采样开始，
+	 * 比较当前状态和上一次状态。
+	 */
+	else if (process_available != previous_process_available)
+	{
+	    const char *process_log_level;
+	
+	    /*
+	     * 当前重新变为可用。
+	     */
+	    if (process_available)
+	    {
+	        process_log_level = "INFO";
+	
+	        log_message_length = snprintf(
+	            log_message,
+	            sizeof(log_message),
+	            "Monitored process recovered: "
+	            "PID=%d Name=%s State=%s Memory=%lu kB",
+	            process_info.pid,
+	            process_info.name,
+	            process_info.state,
+	            process_info.resident_memory_kb
+	        );
+	    }
+	    /*
+	     * 当前变为不可用。
+	     */
+	    else
+	    {
+	        process_log_level = "WARNING";
+	
+	        log_message_length = snprintf(
+	            log_message,
+	            sizeof(log_message),
+	            "Monitored process unavailable: PID=%d",
+	            monitored_process_pid
+	        );
+	    }
+	
+	    /*
+	     * 检查 snprintf 是否失败或发生截断。
+	     */
+	    if (
+        	log_message_length < 0 ||
+	        (size_t)log_message_length >= sizeof(log_message)
+	    )
+	    {
+	        fprintf(
+	            stderr,
+	            "Failed to format process status log\n"
+	        );
+	
+	        return 1;
+	    }
+	
+	    /*
+	     * 只有进程可用状态发生变化时，
+	     * 才写入一次日志。
+	     */
+	    if (
+	        logger_write(
+	            config.log_file,
+	            process_log_level,
+	            log_message
+	        ) != 0
+	    )
+	    {
+	        fprintf(
+	            stderr,
+	            "Failed to write process status log\n"
+	        );
+	
+	        return 1;
+	    }
+	
+	    /*
+	     * 当前状态成为下一轮的上一次状态。
+	     */
+	    previous_process_available = process_available;
+	}
 
         /*
          * 读取当前 CPU 累计时间。
@@ -866,6 +1265,66 @@ int main(int argc, char *argv[])
             "System Status:           [%s]\n",
             alert_level_to_string(system_level)
         );
+
+	/*
+	 * 输出 EdgeSentinel 自身进程的信息。
+	 */
+	/*
+	 * 只有目标进程读取成功时，
+	 * 才访问 process_info 中的数据。
+	 */
+	if (process_available)
+	{
+	    printf(
+	        "Process:          %s PID=%d PPID=%d\n",
+	        process_info.name,
+	        process_info.pid,
+	        process_info.parent_pid
+	    );
+	
+	    printf(
+	        "Process State:    %s\n",
+	        process_info.state
+	    );
+	
+	    printf(
+	        "Process Memory:   %lu kB\n",
+	        process_info.resident_memory_kb
+	    );
+
+    if (process_cpu_usage_valid)
+    {
+        printf(
+            "Process CPU:      %6.2f%% [%s]\n",
+            process_cpu_usage,
+            alert_level_to_string(process_cpu_level)
+        );
+    }
+    else if (process_cpu_sample_initialized)
+    {
+        /*
+         * 第一次采样已经取得，
+         * 但还没有第二次数据用于计算。
+         */
+        printf(
+            "Process CPU:      [COLLECTING]\n"
+        );
+    }
+    else
+    {
+        printf(
+            "Process CPU:      [UNAVAILABLE]\n"
+        );
+    }
+
+	}
+	else
+	{
+	    printf(
+	        "Process:          PID=%d [UNAVAILABLE]\n",
+	        monitored_process_pid
+	    );
+	}
 
         /*
          * 输出磁盘总容量。

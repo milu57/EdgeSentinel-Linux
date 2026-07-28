@@ -73,8 +73,13 @@ void config_set_defaults(AppConfig *config)
 
     config->monitor_interval = 1;
 
+    config->process_pid = 0;
+
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
+
+    config->process_cpu_warning_threshold = 70.0;
+    config->process_cpu_critical_threshold = 90.0;
 
     config->memory_warning_threshold = 75.0;
     config->memory_critical_threshold = 90.0;
@@ -303,6 +308,24 @@ static int config_set_value(
         }
 
         config->monitor_interval = unsigned_int_value;
+    } else if (strcmp(key, "process_pid") == 0) {
+        /*
+         * 把配置文件中的 PID 字符串转换成 unsigned int。
+         *
+         * 例如：
+         *     "0"    → 0
+         *     "1234" → 1234
+         */
+        if (
+            parse_unsigned_int(
+                value,
+                &unsigned_int_value
+            ) != 0
+        ) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->process_pid = unsigned_int_value;
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
     ) {
@@ -319,6 +342,22 @@ static int config_set_value(
         }
 
         config->cpu_critical_threshold = double_value;
+    } else if (
+        strcmp(key, "process_cpu_warning_threshold") == 0
+    ) {
+        if (parse_double(value, &double_value) != 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->process_cpu_warning_threshold = double_value;
+    } else if (
+        strcmp(key, "process_cpu_critical_threshold") == 0
+    ) {
+        if (parse_double(value, &double_value) != 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->process_cpu_critical_threshold = double_value;
     } else if (
         strcmp(key, "memory_warning_threshold") == 0
     ) {
@@ -594,6 +633,58 @@ static int validate_threshold_pair(
 }
 
 /*
+ * 检查进程 CPU 告警阈值是否合法。
+ *
+ * 与系统 CPU 使用率不同，
+ * 单个多线程进程的 CPU 使用率可能超过 100%。
+ *
+ * 因此这里只要求：
+ *
+ * 1. WARNING 不能小于 0；
+ * 2. CRITICAL 不能小于 0；
+ * 3. WARNING 必须小于 CRITICAL。
+ */
+static int validate_process_cpu_threshold_pair(
+    double warning_threshold,
+    double critical_threshold
+)
+{
+    if (warning_threshold < 0.0) {
+        fprintf(
+            stderr,
+            "Invalid process CPU warning threshold: %.2f\n",
+            warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (critical_threshold < 0.0) {
+        fprintf(
+            stderr,
+            "Invalid process CPU critical threshold: %.2f\n",
+            critical_threshold
+        );
+
+        return -1;
+    }
+
+    if (warning_threshold >= critical_threshold) {
+        fprintf(
+            stderr,
+            "Invalid process CPU thresholds: "
+            "warning %.2f must be lower than critical %.2f\n",
+            warning_threshold,
+            critical_threshold
+        );
+
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
  * 检查整个配置结构体是否合法。
  */
 int config_validate(const AppConfig *config)
@@ -621,6 +712,19 @@ int config_validate(const AppConfig *config)
             "CPU",
             config->cpu_warning_threshold,
             config->cpu_critical_threshold
+        ) != 0
+    ) {
+        return -1;
+    }
+
+    /*
+     * 进程 CPU 使用率可能超过 100%，
+     * 所以使用专门的校验函数。
+     */
+    if (
+        validate_process_cpu_threshold_pair(
+            config->process_cpu_warning_threshold,
+            config->process_cpu_critical_threshold
         ) != 0
     ) {
         return -1;
@@ -683,10 +787,29 @@ void config_print(const AppConfig *config)
     printf("monitor_interval          : %u second(s)\n",
            config->monitor_interval);
 
+    printf("process_pid               : %u",
+       config->process_pid);
+
+    if (config->process_pid == 0) {
+        printf(" (self)");
+    }
+
+    printf("\n");
+
     printf("cpu_warning_threshold     : %.2f%%\n",
            config->cpu_warning_threshold);
     printf("cpu_critical_threshold    : %.2f%%\n",
            config->cpu_critical_threshold);
+
+    printf(
+        "process_cpu_warning_threshold  : %.2f%%\n",
+        config->process_cpu_warning_threshold
+    );
+
+    printf(
+        "process_cpu_critical_threshold : %.2f%%\n",
+        config->process_cpu_critical_threshold
+    );
 
     printf("memory_warning_threshold  : %.2f%%\n",
            config->memory_warning_threshold);

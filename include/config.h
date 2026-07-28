@@ -10,9 +10,28 @@ typedef struct {
     /* 监控采样间隔，单位：秒 */
     unsigned int monitor_interval;
 
+    /*
+     * 要监控的进程 PID。
+     *
+     * 0：
+     *     监控 EdgeSentinel 自身。
+     *
+     * 大于 0：
+     *     监控指定 PID 的进程。
+     */
+    unsigned int process_pid;
+
     /* CPU 告警阈值 */
     double cpu_warning_threshold;
     double cpu_critical_threshold;
+
+    /*
+     * 被监控进程的 CPU 使用率告警阈值。
+     *
+     * 当前采用“一个 CPU 核心为 100%”的定义。
+    */
+    double process_cpu_warning_threshold;
+    double process_cpu_critical_threshold;
 
     /* 内存告警阈值 */
     double memory_warning_threshold;
