@@ -246,6 +246,7 @@ int main(int argc, char *argv[])
 
     ProcessInfo process_info;
 
+    double process_memory_mib = 0.0;
     /*
      * 目标进程前后两次累计 CPU 时间。
      */
@@ -320,6 +321,18 @@ int main(int argc, char *argv[])
     AlertLevel system_level;
     AlertLevel process_cpu_level;
     AlertLevel previous_process_cpu_level;
+    AlertLevel process_memory_level;
+    AlertLevel previous_process_memory_level;
+
+
+    /*
+     * 是否已经取得第一次有效的进程内存告警等级。
+     *
+     * 0：还没有基准状态；
+     * 1：已经有基准状态。
+     */
+    int process_memory_level_initialized = 0;
+
     /*
      * 标记是否已经获得第一次有效的
      * 进程 CPU 告警等级。
@@ -536,6 +549,84 @@ int main(int argc, char *argv[])
 	else
 	{
 	    process_available = 1;
+
+        /*
+         * /proc/<pid>/status 中的 VmRSS 单位是 kB。
+         * 1024 kB = 1 MiB。
+         */
+        process_memory_mib =
+            (double)process_info.resident_memory_kb / 1024.0;
+
+        /*
+         * 根据配置文件中的进程内存阈值，
+         * 判断当前告警等级。
+         */
+        process_memory_level =
+            alert_evaluate_percentage(
+                process_memory_mib,
+                config.process_memory_warning_threshold_mib,
+                config.process_memory_critical_threshold_mib
+            );
+
+        /*
+         * 第一次取得告警等级时，只保存基准状态，
+         * 不记录状态变化日志。
+         */
+        if (!process_memory_level_initialized)
+        {
+            previous_process_memory_level = process_memory_level;
+            process_memory_level_initialized = 1;
+        }
+        /*
+         * 从第二次采样开始，判断告警等级是否变化。
+         */
+        else if (process_memory_level != previous_process_memory_level)
+        {
+            log_message_length = snprintf(
+                log_message,
+                sizeof(log_message),
+                "Process memory status changed: "
+                "%s -> %s PID=%d Memory=%.2f MiB",
+                alert_level_to_string(previous_process_memory_level),
+                alert_level_to_string(process_memory_level),
+                monitored_process_pid,
+                process_memory_mib
+            );
+
+            if (
+                log_message_length < 0 ||
+                (size_t)log_message_length >= sizeof(log_message)
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Failed to format process memory status log\n"
+                );
+
+                return 1;
+            }
+
+            if (
+                logger_write(
+                    config.log_file,
+                    alert_level_to_string(process_memory_level),
+                    log_message
+                ) != 0
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Failed to write process memory status log\n"
+                );
+
+                return 1;
+            }
+
+            /*
+             * 保存当前等级，供下一轮比较。
+             */
+            previous_process_memory_level = process_memory_level;
+        }
 	}
 
 
@@ -562,6 +653,7 @@ int main(int argc, char *argv[])
              */
             process_cpu_sample_initialized = 0;
             process_cpu_level_initialized = 0;
+            process_memory_level_initialized = 0;
         }
         else
         {
@@ -1288,8 +1380,9 @@ int main(int argc, char *argv[])
 	    );
 	
 	    printf(
-	        "Process Memory:   %lu kB\n",
-	        process_info.resident_memory_kb
+	        "Process Memory:   %.2f MiB [%s]\n",
+            process_memory_mib,
+            alert_level_to_string(process_memory_level)
 	    );
 
     if (process_cpu_usage_valid)

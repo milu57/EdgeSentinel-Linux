@@ -81,6 +81,9 @@ void config_set_defaults(AppConfig *config)
     config->process_cpu_warning_threshold = 70.0;
     config->process_cpu_critical_threshold = 90.0;
 
+    config->process_memory_warning_threshold_mib = 100.0;
+    config->process_memory_critical_threshold_mib = 200.0;
+
     config->memory_warning_threshold = 75.0;
     config->memory_critical_threshold = 90.0;
 
@@ -359,6 +362,22 @@ static int config_set_value(
 
         config->process_cpu_critical_threshold = double_value;
     } else if (
+        strcmp(key, "process_memory_warning_threshold_mib") == 0
+    ) {
+        if (parse_double(value, &double_value) != 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->process_memory_warning_threshold_mib = double_value;
+    } else if (
+        strcmp(key, "process_memory_critical_threshold_mib") == 0
+    ) {
+        if (parse_double(value, &double_value) != 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->process_memory_critical_threshold_mib = double_value;
+    }else if (
         strcmp(key, "memory_warning_threshold") == 0
     ) {
         if (parse_double(value, &double_value) != 0) {
@@ -685,6 +704,62 @@ static int validate_process_cpu_threshold_pair(
 }
 
 /*
+ * 检查进程常驻内存告警阈值是否合法。
+ *
+ * 单位：MiB。
+ *
+ * 进程内存可能超过 100 MiB，
+ * 因此不能使用只允许 0～100 的百分比校验函数。
+ *
+ * 要求：
+ *
+ * 1. WARNING 不能小于 0；
+ * 2. CRITICAL 不能小于 0；
+ * 3. WARNING 必须小于 CRITICAL。
+ */
+static int validate_process_memory_threshold_pair(
+    double warning_threshold,
+    double critical_threshold
+)
+{
+    if (warning_threshold < 0.0) {
+        fprintf(
+            stderr,
+            "Invalid process memory warning threshold: %.2f MiB\n",
+            warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (critical_threshold < 0.0) {
+        fprintf(
+            stderr,
+            "Invalid process memory critical threshold: %.2f MiB\n",
+            critical_threshold
+        );
+
+        return -1;
+    }
+
+    if (warning_threshold >= critical_threshold) {
+        fprintf(
+            stderr,
+            "Invalid process memory thresholds: "
+            "warning %.2f MiB must be lower than "
+            "critical %.2f MiB\n",
+            warning_threshold,
+            critical_threshold
+        );
+
+        return -1;
+    }
+
+    return 0;
+}
+
+
+/*
  * 检查整个配置结构体是否合法。
  */
 int config_validate(const AppConfig *config)
@@ -725,6 +800,15 @@ int config_validate(const AppConfig *config)
         validate_process_cpu_threshold_pair(
             config->process_cpu_warning_threshold,
             config->process_cpu_critical_threshold
+        ) != 0
+    ) {
+        return -1;
+    }
+
+    if (
+        validate_process_memory_threshold_pair(
+            config->process_memory_warning_threshold_mib,
+            config->process_memory_critical_threshold_mib
         ) != 0
     ) {
         return -1;
@@ -809,6 +893,16 @@ void config_print(const AppConfig *config)
     printf(
         "process_cpu_critical_threshold : %.2f%%\n",
         config->process_cpu_critical_threshold
+    );
+
+    printf(
+        "process_memory_warning_threshold_mib  : %.2f MiB\n",
+        config->process_memory_warning_threshold_mib
+    );
+
+    printf(
+        "process_memory_critical_threshold_mib : %.2f MiB\n",
+        config->process_memory_critical_threshold_mib
     );
 
     printf("memory_warning_threshold  : %.2f%%\n",

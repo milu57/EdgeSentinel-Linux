@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.2.0**
+**v1.3.0**
 
 ---
 
@@ -43,6 +43,10 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 读取父进程 PID
 - 读取进程完整运行状态
 - 读取进程驻留物理内存 `VmRSS`
+- 将进程 `VmRSS` 从 kB 转换为 MiB
+- 支持配置进程常驻内存告警阈值
+- 进程内存 `NORMAL`、`WARNING`、`CRITICAL` 分级
+- 进程内存告警等级变化日志
 - 读取进程用户态累计 CPU 时间
 - 读取进程内核态累计 CPU 时间
 - 计算采样区间内的进程 CPU 使用率
@@ -63,6 +67,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 系统告警状态变化日志
 - 进程可用状态变化日志
 - 进程 CPU 告警状态变化日志
+- 进程内存告警状态变化日志
 - 日志文件自动轮转
 
 ### 服务管理
@@ -146,6 +151,7 @@ EdgeSentinel-Linux/
 │
 ├── tests/
 │   └── test_process_monitor.c
+│   └── process_memory_growth.c
 │
 ├── scripts/
 │   ├── install.sh
@@ -308,6 +314,10 @@ cpu_critical_threshold=90.0
 process_cpu_warning_threshold=70.0
 process_cpu_critical_threshold=90.0
 
+# 被监控进程的常驻内存告警阈值，单位：MiB
+process_memory_warning_threshold_mib=100.0
+process_memory_critical_threshold_mib=200.0
+
 # 内存使用率告警阈值
 memory_warning_threshold=75.0
 memory_critical_threshold=90.0
@@ -332,6 +342,8 @@ log_max_size=1048576
 - `cpu_critical_threshold`：系统 CPU CRITICAL 阈值；
 - `process_cpu_warning_threshold`：目标进程 CPU WARNING 阈值；
 - `process_cpu_critical_threshold`：目标进程 CPU CRITICAL 阈值；
+- `process_memory_warning_threshold_mib`：目标进程常驻内存 WARNING 阈值，单位为 MiB；
+- `process_memory_critical_threshold_mib`：目标进程常驻内存 CRITICAL 阈值，单位为 MiB；
 - `memory_warning_threshold`：内存 WARNING 阈值；
 - `memory_critical_threshold`：内存 CRITICAL 阈值；
 - `disk_warning_threshold`：磁盘 WARNING 阈值；
@@ -350,6 +362,11 @@ log_max_size=1048576
 ```text
 0 <= WARNING < CRITICAL
 ```
+
+进程常驻内存阈值使用 MiB 作为单位，数值也可以超过 `100`，需要满足：
+
+```text
+0 <= WARNING < CRITICAL
 
 ---
 
