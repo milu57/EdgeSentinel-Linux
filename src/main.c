@@ -55,6 +55,14 @@
 static volatile sig_atomic_t keep_running = 1;
 
 /*
+ * 标记是否收到配置重新加载请求。
+ *
+ * 0：没有收到 SIGHUP；
+ * 1：已经收到 SIGHUP，需要重新读取配置文件。
+ */
+static volatile sig_atomic_t reload_requested = 0;
+
+/*
  * 处理程序停止信号。
  *
  * SIGINT：
@@ -76,6 +84,21 @@ static void handle_stop_signal(int signal_number)
     (void)signal_number;
 
     keep_running = 0;
+}
+
+/*
+ * 处理配置重新加载信号。
+ *
+ * 收到 SIGHUP 时，不停止程序，
+ * 只设置重新加载标志。
+ *
+ * 配置文件的实际读取工作由主循环完成。
+ */
+static void handle_reload_signal(int signal_number)
+{
+    (void)signal_number;
+
+    reload_requested = 1;
 }
 
 /*
@@ -114,7 +137,7 @@ int main(int argc, char *argv[])
     const char *config_file = DEFAULT_CONFIG_FILE;
 
     AppConfig config;
-
+    AppConfig reloaded_config;
     /*
      * 实际要监控的目标进程 PID。
      *
@@ -205,6 +228,8 @@ int main(int argc, char *argv[])
     config_print(&config);
 
     struct sigaction action;
+
+    struct sigaction reload_action;
 
     /*
      * CPU 前后两次采样。
@@ -419,6 +444,27 @@ int main(int argc, char *argv[])
     }
 
     /*
+     * 配置 SIGHUP 信号处理。
+     */
+    reload_action.sa_handler = handle_reload_signal;
+
+    sigemptyset(&reload_action.sa_mask);
+
+    reload_action.sa_flags = 0;
+
+    /*
+     * 注册 SIGHUP。
+     *
+     * 收到 SIGHUP 后调用 handle_reload_signal()，
+     * 程序不会退出。
+     */
+    if (sigaction(SIGHUP, &reload_action, NULL) == -1)
+    {
+        perror("sigaction SIGHUP");
+        return 1;
+    }
+
+    /*
      * CPU 使用率需要比较前后两次累计 CPU 时间。
      *
      * 程序启动时先读取第一次数据，
@@ -532,6 +578,98 @@ int main(int argc, char *argv[])
         if (!keep_running)
         {
             break;
+        }
+
+        /*
+         * 收到 SIGHUP 后，重新读取配置文件。
+         */
+        if (reload_requested)
+        {
+            /*
+             * 先清除标志。
+             *
+             * 如果重新加载期间再次收到 SIGHUP，
+             * 信号处理函数会重新把它设置为 1。
+             */
+            reload_requested = 0;
+
+            /*
+             * 先给临时配置填入默认值。
+             */
+            config_set_defaults(&reloaded_config);
+
+            /*
+             * 把配置文件读取到临时结构体中，
+             * 不直接修改当前正在使用的 config。
+             */
+            if (config_load(config_file, &reloaded_config) != 0)
+            {
+                fprintf(
+                    stderr,
+                    "Configuration reload failed, "
+                    "keeping previous configuration.\n"
+                );
+            }
+            else if (config_validate(&reloaded_config) != 0)
+            {
+                fprintf(
+                    stderr,
+                    "Reloaded configuration is invalid, "
+                    "keeping previous configuration.\n"
+                );
+            }
+            else if (
+                logger_init(
+                    reloaded_config.log_file,
+                    reloaded_config.log_max_size
+                ) != 0
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Failed to apply reloaded logger configuration, "
+                    "keeping previous configuration.\n"
+                );
+            }
+            else
+            {
+                /*
+                 * 应用新的正式配置。
+                 */
+                config = reloaded_config;
+
+                /*
+                 * 根据新的 process_pid，
+                 * 重新确定要监控的目标进程。
+                 */
+                if (config.process_pid == 0)
+                {
+                    monitored_process_pid = (int)getpid();
+                }
+                else
+                {
+                    monitored_process_pid = (int)config.process_pid;
+                }
+
+                /*
+                 * 目标进程可能已经改变，
+                 * 旧进程的采样数据不能继续用于新进程。
+                 */
+                process_cpu_sample_initialized = 0;
+                process_cpu_usage_valid = 0;
+                process_availability_initialized = 0;
+                process_cpu_level_initialized = 0;
+                process_memory_level_initialized = 0;
+
+                printf("Configuration reloaded successfully.\n");
+                config_print(&config);
+
+                printf(
+                    "Monitoring process PID: %d%s\n",
+                    monitored_process_pid,
+                    config.process_pid == 0 ? " (self)" : ""
+                );
+            }
         }
 
 	/*
