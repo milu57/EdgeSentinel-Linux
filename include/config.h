@@ -33,6 +33,13 @@ typedef struct {
     double process_cpu_warning_threshold;
     double process_cpu_critical_threshold;
 
+    /*
+     * 被监控进程的常驻内存告警阈值。
+     */
+
+    double process_memory_warning_threshold_mib;
+    double process_memory_critical_threshold_mib;
+
     /* 内存告警阈值 */
     double memory_warning_threshold;
     double memory_critical_threshold;
