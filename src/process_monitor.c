@@ -10,6 +10,89 @@
 #include <unistd.h>
 
 /*
+ * 初始化一个被监控进程对象。
+ */
+int monitored_process_init(
+    MonitoredProcess *process,
+    const char *target_name,
+    int configured_pid,
+    int current_pid
+)
+{
+    int name_length;
+
+    /*
+     * process 必须指向一个有效的
+     * MonitoredProcess 对象。
+     *
+     * PID 不允许是负数。
+     */
+    if (
+        process == NULL ||
+        configured_pid < 0 ||
+        current_pid < 0
+    ) {
+        return -1;
+    }
+
+    /*
+     * 将整个结构体占用的内存清零。
+     *
+     * 清零后：
+     *
+     * PID 为 0；
+     * double 为 0.0；
+     * 各种 initialized 标志为 0；
+     * 字符数组为空字符串。
+     */
+    memset(process, 0, sizeof(*process));
+
+    /*
+     * 如果提供了进程名称，就把名称复制到结构体中。
+     */
+    if (
+        target_name != NULL &&
+        target_name[0] != '\0'
+    ) {
+        name_length = snprintf(
+            process->target_name,
+            sizeof(process->target_name),
+            "%s",
+            target_name
+        );
+
+        /*
+         * 检查名称复制是否失败或者被截断。
+         */
+        if (
+            name_length < 0 ||
+            (size_t)name_length >=
+                sizeof(process->target_name)
+        ) {
+            memset(process, 0, sizeof(*process));
+            return -1;
+        }
+    }
+
+    /*
+     * 保存配置中的 PID和当前实际 PID。
+     */
+    process->configured_pid = configured_pid;
+    process->current_pid = current_pid;
+
+    /*
+     * 明确设置告警等级初始值。
+     */
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+
+    process->memory_level = ALERT_NORMAL;
+    process->previous_memory_level = ALERT_NORMAL;
+
+    return 0;
+}
+
+/*
  * 从 /proc/<pid>/status 中读取指定进程的信息。
  *
  * 成功返回 0。

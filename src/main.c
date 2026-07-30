@@ -138,16 +138,20 @@ int main(int argc, char *argv[])
 
     AppConfig config;
     AppConfig reloaded_config;
+
     /*
-     * 实际要监控的目标进程 PID。
+     * 保存目标进程完整的长期监控状态。
      *
-     * config.process_pid 为 0 时：
-     *     保存 EdgeSentinel 自身 PID。
-     *
-     * config.process_pid 大于 0 时：
-     *     保存配置文件指定的 PID。
+     * 当前阶段先让它接管目标名称和 PID，
+     * 后面再逐步接管 CPU、内存和告警状态。
      */
-    int monitored_process_pid;
+    MonitoredProcess monitored_process;
+
+    /*
+     * 在 MonitoredProcess 初始化之前，
+     * 临时保存第一次确定的目标 PID。
+     */
+    int initial_process_pid = 0;
 
     /*
      * 不带参数：
@@ -206,33 +210,19 @@ int main(int argc, char *argv[])
     }
 
     /*
-     * 确定实际要监控的进程。
+     * 确定程序启动时的目标进程 PID。
      *
-     * process_pid == 0：
-     *     监控 EdgeSentinel 自身。
-     *
-     * process_pid > 0：
-     *     监控配置文件指定的进程。
-         */
-   
+     * 此时 monitored_process 还没有初始化，
+     * 因此先把 PID 保存到临时变量中。
+     */
     if (config.process_name[0] != '\0') {
-        /*
-         * 配置了进程名称时，先尝试扫描 /proc，
-         * 查找名称匹配的进程 PID。
-         */
         if (
             find_process_by_name(
                 config.process_name,
-                &monitored_process_pid
+                &initial_process_pid
             ) != 0
         ) {
-            /*
-             * 当前没有找到目标进程时不退出。
-             *
-             * PID 设置为 0，表示程序目前处于等待状态。
-             * 后续主循环会继续按名称搜索。
-             */
-            monitored_process_pid = 0;
+            initial_process_pid = 0;
 
             printf(
                 "Target process is not running yet: %s\n",
@@ -240,18 +230,38 @@ int main(int argc, char *argv[])
             );
         }
     } else if (config.process_pid == 0) {
-        /*
-         * 没有配置进程名称，并且 process_pid 为 0，
-         * 监控 EdgeSentinel 自身。
-         */
-        monitored_process_pid = (int)getpid();
+        initial_process_pid = (int)getpid();
     } else {
-        /*
-         * 没有配置进程名称时，
-         * 使用配置文件指定的固定 PID。
-         */
-        monitored_process_pid = (int)config.process_pid;
+        initial_process_pid = (int)config.process_pid;
     }
+
+    /*
+     * 使用刚刚确定的配置和 PID，
+     * 初始化目标进程监控对象。
+     */
+    if (
+        monitored_process_init(
+            &monitored_process,
+            config.process_name,
+            (int)config.process_pid,
+            initial_process_pid
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "Failed to initialize monitored process\n"
+        );
+
+        return 1;
+    }
+
+    /*
+     * 当前阶段旧代码仍然使用 monitored_process.current_pid。
+     *
+     * 这里从新的结构体中取出 PID，
+     * 确保两套表示保持一致。
+     */
+    monitored_process.current_pid = monitored_process.current_pid;
 
     /*
      * 暂时打印最终生效的配置，验证读取是否成功。
@@ -302,67 +312,20 @@ int main(int argc, char *argv[])
     LoadAverage load_average;
     CurrentTime current_time;
 
-    ProcessInfo process_info;
-
-    double process_memory_mib = 0.0;
     /*
      * 目标进程前后两次累计 CPU 时间。
      */
-    ProcessCpuTimes previous_process_cpu_times;
     ProcessCpuTimes current_process_cpu_times;
 
     /*
      * 两次进程 CPU 采样对应的实际时间。
      */
-    struct timespec previous_process_cpu_time;
     struct timespec current_process_cpu_time;
 
     /*
      * 两次采样之间经过的实际秒数。
      */
     double process_elapsed_seconds;
-
-    /*
-     * 目标进程的 CPU 使用率。
-     *
-     * 100% 约等于占满一个 CPU 核心。
-     */
-    double process_cpu_usage = 0.0;
-
-    /*
-     * 是否已经保存了第一次进程 CPU 采样。
-     *
-     * 0：尚未保存；
-     * 1：已经保存。
-     */
-    int process_cpu_sample_initialized = 0;
-
-    /*
-     * 当前这一轮计算出的 CPU 使用率是否有效。
-     */
-    int process_cpu_usage_valid = 0;
-
-    /*
-     * 标记目标进程当前是否存在并且能够读取。
-     *
-     * 1：目标进程可用
-     * 0：目标进程不可用
-     */
-    int process_available;
-
-    /*
-     * 保存上一次采样时，目标进程是否可用。
-    */
-    int previous_process_available;
-    
-    /*
-     * 标记 previous_process_available
-     * 是否已经获得第一次有效结果。
-     *
-     * 0：还没有上一次状态
-     * 1：已经有上一次状态
-     */
-    int process_availability_initialized = 0;
 
     /*
      * 各项资源的告警等级。
@@ -377,28 +340,6 @@ int main(int argc, char *argv[])
     AlertLevel memory_level;
     AlertLevel disk_level;
     AlertLevel system_level;
-    AlertLevel process_cpu_level;
-    AlertLevel previous_process_cpu_level;
-    AlertLevel process_memory_level;
-    AlertLevel previous_process_memory_level;
-
-
-    /*
-     * 是否已经取得第一次有效的进程内存告警等级。
-     *
-     * 0：还没有基准状态；
-     * 1：已经有基准状态。
-     */
-    int process_memory_level_initialized = 0;
-
-    /*
-     * 标记是否已经获得第一次有效的
-     * 进程 CPU 告警等级。
-     *
-     * 0：还没有基准状态；
-     * 1：已经保存了基准状态。
-     */
-    int process_cpu_level_initialized = 0;
 
 	/*
 	 * 保存上一次采样得到的系统状态，
@@ -584,12 +525,12 @@ int main(int argc, char *argv[])
         printf(
             "Monitoring process: %s (PID: %d)\n",
             config.process_name,
-            monitored_process_pid
+            monitored_process.current_pid
         );
     } else {
         printf(
             "Monitoring process PID: %d%s\n",
-            monitored_process_pid,
+            monitored_process.current_pid,
             config.process_pid == 0 ? " (self)" : ""
         );
     }
@@ -692,7 +633,7 @@ int main(int argc, char *argv[])
                     if (
                         find_process_by_name(
                             config.process_name,
-                            &monitored_process_pid
+                            &monitored_process.current_pid
                         ) != 0
                     )
                     {
@@ -700,7 +641,7 @@ int main(int argc, char *argv[])
                          * 当前没有找到目标进程。
                          * PID 设置为 0，主循环后续继续搜索。
                          */
-                        monitored_process_pid = 0;
+                        monitored_process.current_pid = 0;
                     }
                 }
                 else if (config.process_pid == 0)
@@ -709,36 +650,36 @@ int main(int argc, char *argv[])
                      * 没有配置名称，并且 PID 为 0，
                      * 监控 EdgeSentinel 自身。
                      */
-                    monitored_process_pid = (int)getpid();
+                    monitored_process.current_pid = (int)getpid();
                 }
                 else
                 {
                     /*
                      * 没有配置名称时，使用固定 PID。
                      */
-                    monitored_process_pid = (int)config.process_pid;
+                    monitored_process.current_pid = (int)config.process_pid;
                 }
                 /*
                  * 目标进程可能已经改变，
                  * 旧进程的采样数据不能继续用于新进程。
                  */
-                process_cpu_sample_initialized = 0;
-                process_cpu_usage_valid = 0;
-                process_availability_initialized = 0;
-                process_cpu_level_initialized = 0;
-                process_memory_level_initialized = 0;
+                monitored_process.cpu_sample_initialized = 0;
+                monitored_process.cpu_usage_valid = 0;
+                monitored_process.availability_initialized = 0;
+                monitored_process.cpu_level_initialized = 0;
+                monitored_process.memory_level_initialized = 0;
 
                 printf("Configuration reloaded successfully.\n");
                 config_print(&config);
 
                 if (config.process_name[0] != '\0')
                 {
-                    if (monitored_process_pid > 0)
+                    if (monitored_process.current_pid > 0)
                     {
                         printf(
                             "Monitoring process: %s (PID: %d)\n",
                             config.process_name,
-                            monitored_process_pid
+                            monitored_process.current_pid
                         );
                     }
                     else
@@ -753,7 +694,7 @@ int main(int argc, char *argv[])
                 {
                     printf(
                         "Monitoring process PID: %d%s\n",
-                        monitored_process_pid,
+                        monitored_process.current_pid,
                         config.process_pid == 0 ? " (self)" : ""
                     );
                 }
@@ -766,28 +707,28 @@ int main(int argc, char *argv[])
      */
     if (
         config.process_name[0] != '\0' &&
-        monitored_process_pid == 0
+        monitored_process.current_pid == 0
     ) {
         if (
             find_process_by_name(
                 config.process_name,
-                &monitored_process_pid
+                &monitored_process.current_pid
             ) == 0
         ) {
             printf(
                 "Target process found: %s (PID: %d)\n",
                 config.process_name,
-                monitored_process_pid
+                monitored_process.current_pid
             );
 
             /*
              * 新找到的 PID 代表一个新的进程实例。
              * 旧进程的 CPU 和内存比较基准不能继续使用。
              */
-            process_cpu_sample_initialized = 0;
-            process_cpu_usage_valid = 0;
-            process_cpu_level_initialized = 0;
-            process_memory_level_initialized = 0;
+            monitored_process.cpu_sample_initialized = 0;
+            monitored_process.cpu_usage_valid = 0;
+            monitored_process.cpu_level_initialized = 0;
+            monitored_process.memory_level_initialized = 0;
         }
     }
 
@@ -795,32 +736,32 @@ int main(int argc, char *argv[])
 	 * 读取目标进程的信息。
 	 */
     if (
-        monitored_process_pid <= 0 ||
+        monitored_process.current_pid <= 0 ||
         read_process_info(
-            monitored_process_pid,
-            &process_info
+            monitored_process.current_pid,
+            &monitored_process.info
         ) != 0
     )
     {
-        process_available = 0;
+        monitored_process.available = 0;
     }
     else
     {
-        process_available = 1;
+        monitored_process.available = 1;
         /*
          * /proc/<pid>/status 中的 VmRSS 单位是 kB。
          * 1024 kB = 1 MiB。
          */
-        process_memory_mib =
-            (double)process_info.resident_memory_kb / 1024.0;
+        monitored_process.memory_mib =
+            (double)monitored_process.info.resident_memory_kb / 1024.0;
 
         /*
          * 根据配置文件中的进程内存阈值，
          * 判断当前告警等级。
          */
-        process_memory_level =
+        monitored_process.memory_level =
             alert_evaluate_percentage(
-                process_memory_mib,
+                monitored_process.memory_mib,
                 config.process_memory_warning_threshold_mib,
                 config.process_memory_critical_threshold_mib
             );
@@ -829,25 +770,25 @@ int main(int argc, char *argv[])
          * 第一次取得告警等级时，只保存基准状态，
          * 不记录状态变化日志。
          */
-        if (!process_memory_level_initialized)
+        if (!monitored_process.memory_level_initialized)
         {
-            previous_process_memory_level = process_memory_level;
-            process_memory_level_initialized = 1;
+            monitored_process.previous_memory_level = monitored_process.memory_level;
+            monitored_process.memory_level_initialized = 1;
         }
         /*
          * 从第二次采样开始，判断告警等级是否变化。
          */
-        else if (process_memory_level != previous_process_memory_level)
+        else if (monitored_process.memory_level != monitored_process.previous_memory_level)
         {
             log_message_length = snprintf(
                 log_message,
                 sizeof(log_message),
                 "Process memory status changed: "
                 "%s -> %s PID=%d Memory=%.2f MiB",
-                alert_level_to_string(previous_process_memory_level),
-                alert_level_to_string(process_memory_level),
-                monitored_process_pid,
-                process_memory_mib
+                alert_level_to_string(monitored_process.previous_memory_level),
+                alert_level_to_string(monitored_process.memory_level),
+                monitored_process.current_pid,
+                monitored_process.memory_mib
             );
 
             if (
@@ -866,7 +807,7 @@ int main(int argc, char *argv[])
             if (
                 logger_write(
                     config.log_file,
-                    alert_level_to_string(process_memory_level),
+                    alert_level_to_string(monitored_process.memory_level),
                     log_message
                 ) != 0
             )
@@ -882,7 +823,7 @@ int main(int argc, char *argv[])
             /*
              * 保存当前等级，供下一轮比较。
              */
-            previous_process_memory_level = process_memory_level;
+            monitored_process.previous_memory_level = monitored_process.memory_level;
         }
 	}
 
@@ -890,16 +831,16 @@ int main(int argc, char *argv[])
     /*
      * 每轮开始时，先认为本轮没有计算出有效 CPU 使用率。
      */
-    process_cpu_usage_valid = 0;
+    monitored_process.cpu_usage_valid = 0;
 
     /*
      * 只有目标进程可用时，才读取它的累计 CPU 时间。
      */
-    if (process_available)
+    if (monitored_process.available)
     {
         if (
             read_process_cpu_times(
-                monitored_process_pid,
+                monitored_process.current_pid,
                 &current_process_cpu_times
             ) != 0
         )
@@ -908,9 +849,9 @@ int main(int argc, char *argv[])
              * 进程可能刚好在读取期间退出。
              * 清除原有采样基准。
              */
-            process_cpu_sample_initialized = 0;
-            process_cpu_level_initialized = 0;
-            process_memory_level_initialized = 0;
+            monitored_process.cpu_sample_initialized = 0;
+            monitored_process.cpu_level_initialized = 0;
+            monitored_process.memory_level_initialized = 0;
         }
         else
         {
@@ -932,15 +873,15 @@ int main(int argc, char *argv[])
              * 第一次采样只能保存基准，
              * 暂时不能计算 CPU 使用率。
              */
-            if (!process_cpu_sample_initialized)
+            if (!monitored_process.cpu_sample_initialized)
             {
-                previous_process_cpu_times =
+                monitored_process.previous_cpu_times =
                     current_process_cpu_times;
 
-                previous_process_cpu_time =
+                monitored_process.previous_cpu_sample_time =
                     current_process_cpu_time;
 
-                process_cpu_sample_initialized = 1;
+                monitored_process.cpu_sample_initialized = 1;
             }
             else
             {
@@ -949,34 +890,34 @@ int main(int argc, char *argv[])
                  */
                 process_elapsed_seconds =
                     calculate_elapsed_seconds(
-                        &previous_process_cpu_time,
+                        &monitored_process.previous_cpu_sample_time,
                         &current_process_cpu_time
                     );
 
                 /*
                  * 计算目标进程 CPU 使用率。
                  */
-                process_cpu_usage =
+                monitored_process.cpu_usage =
                 calculate_process_cpu_usage(
-                    &previous_process_cpu_times,
+                    &monitored_process.previous_cpu_times,
                     &current_process_cpu_times,
                     process_elapsed_seconds
                 );
 
-            if (process_cpu_usage >= 0.0)
+            if (monitored_process.cpu_usage >= 0.0)
             {
                 /*
                  * 本轮已经得到了有效的进程 CPU 使用率。
                  */
-                process_cpu_usage_valid = 1;
+                monitored_process.cpu_usage_valid = 1;
 
                 /*
                  * 根据配置文件中的进程 CPU 阈值，
                  * 判断告警等级。
                  */
-                process_cpu_level =
+                monitored_process.cpu_level =
                     alert_evaluate_percentage(
-                        process_cpu_usage,
+                        monitored_process.cpu_usage,
                         config.process_cpu_warning_threshold,
                         config.process_cpu_critical_threshold
                     );
@@ -985,16 +926,16 @@ int main(int argc, char *argv[])
                  * 第一次获得有效的进程 CPU 告警等级时，
                  * 只保存基准，不记录“状态变化”。
                  */
-                if (!process_cpu_level_initialized)
+                if (!monitored_process.cpu_level_initialized)
                 {
-                    previous_process_cpu_level = process_cpu_level;
-                    process_cpu_level_initialized = 1;
+                    monitored_process.previous_cpu_level = monitored_process.cpu_level;
+                    monitored_process.cpu_level_initialized = 1;
                 }
                 /*
                  * 从第二次有效采样开始，
                  * 判断告警等级是否发生变化。
                  */
-                else if (process_cpu_level != previous_process_cpu_level)
+                else if (monitored_process.cpu_level != monitored_process.previous_cpu_level)
                 {
                     log_message_length = snprintf(
                         log_message,
@@ -1002,10 +943,10 @@ int main(int argc, char *argv[])
                         "Process CPU status changed: "
                         "%s -> %s "
                         "PID=%d CPU=%.2f%%",
-                        alert_level_to_string(previous_process_cpu_level),
-                        alert_level_to_string(process_cpu_level),
-                        monitored_process_pid,
-                        process_cpu_usage
+                        alert_level_to_string(monitored_process.previous_cpu_level),
+                        alert_level_to_string(monitored_process.cpu_level),
+                        monitored_process.current_pid,
+                        monitored_process.cpu_usage
                     );
 
                     /*
@@ -1030,7 +971,7 @@ int main(int argc, char *argv[])
                     if (
                         logger_write(
                             config.log_file,
-                            alert_level_to_string(process_cpu_level),
+                            alert_level_to_string(monitored_process.cpu_level),
                             log_message
                         ) != 0
                     )
@@ -1046,7 +987,7 @@ int main(int argc, char *argv[])
                     /*
                      * 当前等级成为下一轮比较时的上一次等级。
                      */
-                    previous_process_cpu_level = process_cpu_level;
+                    monitored_process.previous_cpu_level = monitored_process.cpu_level;
                 }
 
             }
@@ -1055,10 +996,10 @@ int main(int argc, char *argv[])
                 /*
                  * 当前采样成为下一轮的基准。
                  */
-                previous_process_cpu_times =
+                monitored_process.previous_cpu_times =
                     current_process_cpu_times;
 
-                previous_process_cpu_time =
+                monitored_process.previous_cpu_sample_time =
                     current_process_cpu_time;
             }
         }
@@ -1068,31 +1009,31 @@ int main(int argc, char *argv[])
         /*
          * 进程不可用后，旧的累计值不能继续使用。
          */
-        process_cpu_sample_initialized = 0;
-        process_cpu_level_initialized = 0;
+        monitored_process.cpu_sample_initialized = 0;
+        monitored_process.cpu_level_initialized = 0;
     }
 
 	/*
 	 * 第一次采样时还没有“上一次状态”，
 	 * 因此只保存当前结果，不记录状态变化日志。
 	 */
-	if (!process_availability_initialized)
+	if (!monitored_process.availability_initialized)
 	{
-	    previous_process_available = process_available;
-	    process_availability_initialized = 1;
+	    monitored_process.previous_available = monitored_process.available;
+	    monitored_process.availability_initialized = 1;
 	}
 	/*
 	 * 从第二次采样开始，
 	 * 比较当前状态和上一次状态。
 	 */
-	else if (process_available != previous_process_available)
+	else if (monitored_process.available != monitored_process.previous_available)
 	{
 	    const char *process_log_level;
 	
 	    /*
 	     * 当前重新变为可用。
 	     */
-	    if (process_available)
+	    if (monitored_process.available)
 	    {
 	        process_log_level = "INFO";
 	
@@ -1101,10 +1042,10 @@ int main(int argc, char *argv[])
 	            sizeof(log_message),
 	            "Monitored process recovered: "
 	            "PID=%d Name=%s State=%s Memory=%lu kB",
-	            process_info.pid,
-	            process_info.name,
-	            process_info.state,
-	            process_info.resident_memory_kb
+	            monitored_process.info.pid,
+	            monitored_process.info.name,
+	            monitored_process.info.state,
+	            monitored_process.info.resident_memory_kb
 	        );
 	    }
 	    /*
@@ -1118,7 +1059,7 @@ int main(int argc, char *argv[])
 	            log_message,
 	            sizeof(log_message),
 	            "Monitored process unavailable: PID=%d",
-	            monitored_process_pid
+	            monitored_process.current_pid
 	        );
 	    }
 	
@@ -1161,7 +1102,7 @@ int main(int argc, char *argv[])
 	    /*
 	     * 当前状态成为下一轮的上一次状态。
 	     */
-	    previous_process_available = process_available;
+	    monitored_process.previous_available = monitored_process.available;
 	}
 
         /*
@@ -1620,37 +1561,37 @@ int main(int argc, char *argv[])
 	 */
 	/*
 	 * 只有目标进程读取成功时，
-	 * 才访问 process_info 中的数据。
+	 * 才访问 monitored_process.info 中的数据。
 	 */
-	if (process_available)
+	if (monitored_process.available)
 	{
 	    printf(
 	        "Process:          %s PID=%d PPID=%d\n",
-	        process_info.name,
-	        process_info.pid,
-	        process_info.parent_pid
+	        monitored_process.info.name,
+	        monitored_process.info.pid,
+	        monitored_process.info.parent_pid
 	    );
 	
 	    printf(
 	        "Process State:    %s\n",
-	        process_info.state
+	        monitored_process.info.state
 	    );
 	
 	    printf(
 	        "Process Memory:   %.2f MiB [%s]\n",
-            process_memory_mib,
-            alert_level_to_string(process_memory_level)
+            monitored_process.memory_mib,
+            alert_level_to_string(monitored_process.memory_level)
 	    );
 
-    if (process_cpu_usage_valid)
+    if (monitored_process.cpu_usage_valid)
     {
         printf(
             "Process CPU:      %6.2f%% [%s]\n",
-            process_cpu_usage,
-            alert_level_to_string(process_cpu_level)
+            monitored_process.cpu_usage,
+            alert_level_to_string(monitored_process.cpu_level)
         );
     }
-    else if (process_cpu_sample_initialized)
+    else if (monitored_process.cpu_sample_initialized)
     {
         /*
          * 第一次采样已经取得，
@@ -1672,7 +1613,7 @@ int main(int argc, char *argv[])
 	{
 	    printf(
 	        "Process:          PID=%d [UNAVAILABLE]\n",
-	        monitored_process_pid
+	        monitored_process.current_pid
 	    );
 	}
 
@@ -1749,9 +1690,9 @@ int main(int argc, char *argv[])
          */
         if (
             config.process_name[0] != '\0' &&
-            !process_available
+            !monitored_process.available
         ) {
-            monitored_process_pid = 0;
+            monitored_process.current_pid = 0;
         }
 
         /*
