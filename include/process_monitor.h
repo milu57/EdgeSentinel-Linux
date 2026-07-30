@@ -57,4 +57,7 @@ double calculate_process_cpu_usage(
     double elapsed_seconds
 );
 
+
+int find_process_by_name(const char *process_name, int *pid);
+
 #endif

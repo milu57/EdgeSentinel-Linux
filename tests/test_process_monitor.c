@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "process_monitor.h"
 
@@ -129,6 +130,47 @@ static int perform_cpu_work(double duration_seconds)
      * 避免出现“变量未使用”的警告。
      */
     (void)accumulator;
+
+    return 0;
+}
+
+static int test_find_process_by_name(void)
+{
+    int current_pid;
+    int found_pid;
+    ProcessInfo current_process;
+    ProcessInfo found_process;
+
+    current_pid = (int)getpid();
+
+    if (read_process_info(current_pid, &current_process) != 0) {
+        printf("[FAIL] Could not read current process information.\n");
+        return -1;
+    }
+
+    printf("Current test process:\n");
+    printf("  Name: %s\n", current_process.name);
+    printf("  PID:  %d\n", current_pid);
+
+    if (find_process_by_name(current_process.name, &found_pid) != 0) {
+        printf("[FAIL] Could not find process by name: %s\n",
+               current_process.name);
+        return -1;
+    }
+
+    if (read_process_info(found_pid, &found_process) != 0) {
+        printf("[FAIL] Could not read found process information.\n");
+        return -1;
+    }
+
+    if (strcmp(found_process.name, current_process.name) != 0) {
+        printf("[FAIL] Found process name does not match.\n");
+        return -1;
+    }
+
+    printf("[PASS] Found process by name.\n");
+    printf("  Name: %s\n", found_process.name);
+    printf("  PID:  %d\n", found_pid);
 
     return 0;
 }
@@ -379,5 +421,13 @@ int main(void)
         process_cpu_usage
     );
 
+
+    printf("\nTesting process lookup by name...\n");
+
+    if (test_find_process_by_name() != 0) {
+        return 1;
+    }
+
     return 0;
 }
+

@@ -1,6 +1,8 @@
 #include "process_monitor.h"
 
 #include <ctype.h>
+#include <limits.h>
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -238,6 +240,73 @@ int read_process_info(int pid, ProcessInfo *info)
     return 0;
 }
 
+static int is_pid_directory_name(const char *name)
+{
+    const char *current;
+
+    if (name == NULL || name[0] == '\0') {
+        return 0;
+    }
+
+    current = name;
+
+    while (*current != '\0') {
+        if (!isdigit((unsigned char)*current)) {
+            return 0;
+        }
+
+        current++;
+    }
+
+    return 1;
+}
+
+int find_process_by_name(const char *process_name, int *pid)
+{
+    DIR *proc_directory;
+    struct dirent *entry;
+
+    if (process_name == NULL || pid == NULL) {
+        return -1;
+    }
+
+    proc_directory = opendir("/proc");
+
+    if (proc_directory == NULL) {
+        return -1;
+    }
+
+    while ((entry = readdir(proc_directory)) != NULL) {
+        long pid_value;
+        char *end_pointer;
+        ProcessInfo process_info;
+
+        if (!is_pid_directory_name(entry->d_name)) {
+            continue;
+        }
+
+        pid_value = strtol(entry->d_name, &end_pointer, 10);
+
+        if (*end_pointer != '\0' ||
+            pid_value <= 0 ||
+            pid_value > INT_MAX) {
+            continue;
+        }
+
+        if (read_process_info((int)pid_value, &process_info) != 0) {
+            continue;
+        }
+
+        if (strcmp(process_info.name, process_name) == 0) {
+            *pid = (int)pid_value;
+            closedir(proc_directory);
+            return 0;
+        }
+    }
+
+    closedir(proc_directory);
+    return -1;
+}
 
 /*
  * 从 /proc/<pid>/stat 中读取进程累计 CPU 时间。
