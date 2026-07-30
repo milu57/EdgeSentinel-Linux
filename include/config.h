@@ -20,6 +20,7 @@ typedef struct {
      *     监控指定 PID 的进程。
      */
     unsigned int process_pid;
+    char process_name[256];
 
     /* CPU 告警阈值 */
     double cpu_warning_threshold;

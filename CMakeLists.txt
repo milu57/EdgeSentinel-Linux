@@ -24,3 +24,26 @@ target_compile_options(edgesentinel PRIVATE
     -Wextra
     -Wpedantic
 )
+
+# Build the process monitor test program.
+add_executable(test_process_monitor
+    tests/test_process_monitor.c
+    src/process_monitor.c
+)
+
+target_include_directories(test_process_monitor PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_process_monitor PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+enable_testing()
+
+add_test(
+    NAME process_monitor_test
+    COMMAND test_process_monitor
+)

@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.4.0**
+**v1.5.0**
 
 ---
 
@@ -36,24 +36,34 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ### 进程监控
 
-- 支持监控 EdgeSentinel 自身进程
-- 支持通过 PID 监控指定进程
-- 读取进程名称
-- 读取进程 PID
-- 读取父进程 PID
-- 读取进程完整运行状态
-- 读取进程驻留物理内存 `VmRSS`
-- 将进程 `VmRSS` 从 kB 转换为 MiB
-- 支持配置进程常驻内存告警阈值
-- 进程内存 `NORMAL`、`WARNING`、`CRITICAL` 分级
-- 进程内存告警等级变化日志
-- 读取进程用户态累计 CPU 时间
-- 读取进程内核态累计 CPU 时间
-- 计算采样区间内的进程 CPU 使用率
-- 进程 CPU `NORMAL`、`WARNING`、`CRITICAL` 分级
-- 进程 CPU 告警等级变化日志
-- 目标进程退出和不可用检测
-- 目标进程不可用时继续执行系统监控
+* 支持监控 EdgeSentinel 自身进程
+* 支持通过 PID 监控指定进程
+* 支持通过进程名称自动查找目标进程
+* 自动扫描 `/proc`，查找名称匹配的进程
+* `process_name` 非空时优先使用进程名称监控
+* `process_name` 为空时使用 `process_pid`
+* 目标进程尚未启动时持续等待，不影响系统资源监控
+* 目标进程启动后自动获取其 PID 并开始监控
+* 目标进程退出后自动恢复查找状态
+* 目标进程重新启动后自动跟踪新的 PID
+* 支持通过 `SIGHUP` 热更新目标进程名称或 PID
+* 目标进程改变后自动重置进程 CPU 采样状态
+* 读取进程名称
+* 读取进程 PID
+* 读取父进程 PID
+* 读取进程完整运行状态
+* 读取进程驻留物理内存 `VmRSS`
+* 将进程 `VmRSS` 从 kB 转换为 MiB
+* 支持配置进程常驻内存告警阈值
+* 进程内存 `NORMAL`、`WARNING`、`CRITICAL` 分级
+* 进程内存告警等级变化日志
+* 读取进程用户态累计 CPU 时间
+* 读取进程内核态累计 CPU 时间
+* 计算采样区间内的进程 CPU 使用率
+* 进程 CPU `NORMAL`、`WARNING`、`CRITICAL` 分级
+* 进程 CPU 告警等级变化日志
+* 目标进程退出和不可用检测
+* 目标进程不可用时继续执行系统监控
 
 ### 配置与日志
 
@@ -62,7 +72,9 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 支持通过 `SIGHUP` 在程序运行期间重新加载配置
 - 配置热加载不需要停止或重启程序
 - 非法的新配置不会覆盖当前生效配置
-- 支持热更新监控间隔、告警阈值和目标进程 PID
+- 支持热更新监控间隔和告警阈值
+- 支持热更新目标进程名称和目标进程 PID
+- 进程监控目标改变后自动重新初始化采样状态
 - 支持热更新日志文件路径和日志轮转大小
 - 配置格式校验
 - 配置数值合法性校验
@@ -85,7 +97,10 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 服务异常退出后自动重启
 - 自动编译和安装脚本
 - 安全卸载脚本
-- 卸载时保留系统配置和历史日志
+- 卸## 进程监控
+
+- 支持监控 EdgeSentinel 自身进程
+- 支持通过 载时保留系统配置和历史日志
 
 ---
 
@@ -94,7 +109,10 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 推荐环境：
 
 - Linux
-- GCC 或其他支持 C11 的编译器
+- GCC 或其## 进程监控
+
+- 支持监控 EdgeSentinel 自身进程
+- 支持通过 他支持 C11 的编译器
 - CMake 3.10 或更高版本
 - systemd
 - Bash
@@ -316,10 +334,18 @@ config/edgesentinel.conf
 # 监控采样间隔，单位：秒
 monitor_interval=3
 
+# 要监控的进程名称
+# 非空时优先通过进程名称查找目标进程
+# 找不到目标进程时会持续等待
+# 目标进程重启后会自动跟踪新的 PID
+process_name=
+
 # 要监控的进程 PID
+# process_name 为空时，本配置项才会生效
 # 0 表示监控 EdgeSentinel 自身
 # 大于 0 表示监控指定 PID
 process_pid=0
+
 
 # 整个系统的 CPU 使用率告警阈值
 cpu_warning_threshold=70.0
@@ -352,6 +378,19 @@ log_max_size=1048576
 ```
 
 ### 配置项说明
+
+## 进程监控目标选择规则
+
+EdgeSentinel 按照以下顺序确定需要监控的目标进程：
+
+1. 当 `process_name` 非空时，程序扫描 `/proc`，查找名称匹配的进程；
+2. 当 `process_name` 为空且 `process_pid` 大于 `0` 时，程序监控指定 PID；
+3. 当 `process_name` 为空且 `process_pid` 等于 `0` 时，程序监控 EdgeSentinel 自身。
+
+按进程名称监控时，目标进程的 PID 可以发生变化。
+如果目标进程尚未启动，EdgeSentinel 会保持等待状态，同时继续执行系统 CPU、内存、磁盘、负载和网络监控。
+目标进程启动后，程序会自动获取其 PID 并开始采集进程信息。目标进程退出后，程序会重新进入查找状态；当目标进程再次启动时，程序会自动跟踪新的 PID，无需修改配置或重新启动 EdgeSentinel。
+
 
 - `monitor_interval`：监控采样间隔，单位为秒；
 - `process_pid`：目标进程 PID；
@@ -1024,11 +1063,22 @@ systemctl is-enabled edgesentinel
 sudo nano /etc/edgesentinel/edgesentinel.conf
 ```
 
-修改配置后，可以向服务发送 `SIGHUP`，让程序重新加载配置：
+修改配置后，可以向 EdgeSentinel 服务发送 `SIGHUP`，让程序在不停止服务的情况下重新加载配置：
 
 ```bash
-sudo systemctl restart edgesentinel
+sudo systemctl kill -s HUP edgesentinel
 ```
+
+查看配置重新加载日志：
+
+```bash
+sudo journalctl -u edgesentinel -n 30 --no-pager
+```
+
+如果新配置合法，程序会应用新的配置；如果配置文件读取失败或配置值不合法，程序会继续使用当前已经生效的配置。
+
+
+
 
 项目目录中的：
 
@@ -1181,6 +1231,22 @@ tail -n 30 logs/edgesentinel.log
 
 ## 版本说明
 
+### v1.5.0
+
+* 新增按进程名称监控目标进程的功能；
+* 新增 `process_name` 配置项；
+* 自动扫描 `/proc` 查找名称匹配的进程；
+* `process_name` 非空时优先于 `process_pid`；
+* 目标进程尚未启动时保持等待状态；
+* 等待目标进程期间继续执行系统资源监控；
+* 目标进程启动后自动获取 PID 并开始监控；
+* 目标进程退出后自动恢复查找状态；
+* 目标进程重新启动后自动跟踪新的 PID；
+* 目标进程 PID 改变后重置进程 CPU 采样状态；
+* 支持通过 `SIGHUP` 热更新目标进程名称和 PID；
+* 保留原有固定 PID 和监控 EdgeSentinel 自身的功能。
+
+
 ### v1.4.0
 
 - 新增 `SIGHUP` 信号处理；
@@ -1293,9 +1359,10 @@ tail -n 30 logs/edgesentinel.log
 ---
 
 ## 后续计划
+* 支持同时监控多个目标进程；
+* 增加自动化单元测试；
+* 增加网络接口过滤配置；
+* 增加更多通知和告警方式；
+* 增加 JSON 或其他结构化输出格式；
+* 为 ARM Linux 和边缘设备部署进行适配。
 
-- 增加自动化单元测试；
-- 增加网络接口过滤配置；
-- 增加更多通知和告警方式；
-- 增加 JSON 或其他结构化输出格式；
-- 为后续边缘设备部署进行适配。

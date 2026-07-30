@@ -213,10 +213,43 @@ int main(int argc, char *argv[])
      *
      * process_pid > 0：
      *     监控配置文件指定的进程。
-     */
-    if (config.process_pid == 0) {
+         */
+   
+    if (config.process_name[0] != '\0') {
+        /*
+         * 配置了进程名称时，先尝试扫描 /proc，
+         * 查找名称匹配的进程 PID。
+         */
+        if (
+            find_process_by_name(
+                config.process_name,
+                &monitored_process_pid
+            ) != 0
+        ) {
+            /*
+             * 当前没有找到目标进程时不退出。
+             *
+             * PID 设置为 0，表示程序目前处于等待状态。
+             * 后续主循环会继续按名称搜索。
+             */
+            monitored_process_pid = 0;
+
+            printf(
+                "Target process is not running yet: %s\n",
+                config.process_name
+            );
+        }
+    } else if (config.process_pid == 0) {
+        /*
+         * 没有配置进程名称，并且 process_pid 为 0，
+         * 监控 EdgeSentinel 自身。
+         */
         monitored_process_pid = (int)getpid();
     } else {
+        /*
+         * 没有配置进程名称时，
+         * 使用配置文件指定的固定 PID。
+         */
         monitored_process_pid = (int)config.process_pid;
     }
 
@@ -547,11 +580,19 @@ int main(int argc, char *argv[])
 
     printf("EdgeSentinel system monitor started.\n");
     
-    printf(
-        "Monitoring process PID: %d%s\n",
-        monitored_process_pid,
-        config.process_pid == 0 ? " (self)" : ""
-    );
+        if (config.process_name[0] != '\0') {
+        printf(
+            "Monitoring process: %s (PID: %d)\n",
+            config.process_name,
+            monitored_process_pid
+        );
+    } else {
+        printf(
+            "Monitoring process PID: %d%s\n",
+            monitored_process_pid,
+            config.process_pid == 0 ? " (self)" : ""
+        );
+    }
 
     printf("Monitoring disk mount point: /\n");
     printf(
@@ -642,15 +683,41 @@ int main(int argc, char *argv[])
                  * 根据新的 process_pid，
                  * 重新确定要监控的目标进程。
                  */
-                if (config.process_pid == 0)
+                if (config.process_name[0] != '\0')
                 {
+                    /*
+                     * 配置了进程名称时，
+                     * 根据名称查找当前对应的 PID。
+                     */
+                    if (
+                        find_process_by_name(
+                            config.process_name,
+                            &monitored_process_pid
+                        ) != 0
+                    )
+                    {
+                        /*
+                         * 当前没有找到目标进程。
+                         * PID 设置为 0，主循环后续继续搜索。
+                         */
+                        monitored_process_pid = 0;
+                    }
+                }
+                else if (config.process_pid == 0)
+                {
+                    /*
+                     * 没有配置名称，并且 PID 为 0，
+                     * 监控 EdgeSentinel 自身。
+                     */
                     monitored_process_pid = (int)getpid();
                 }
                 else
                 {
+                    /*
+                     * 没有配置名称时，使用固定 PID。
+                     */
                     monitored_process_pid = (int)config.process_pid;
                 }
-
                 /*
                  * 目标进程可能已经改变，
                  * 旧进程的采样数据不能继续用于新进程。
@@ -664,30 +731,82 @@ int main(int argc, char *argv[])
                 printf("Configuration reloaded successfully.\n");
                 config_print(&config);
 
-                printf(
-                    "Monitoring process PID: %d%s\n",
-                    monitored_process_pid,
-                    config.process_pid == 0 ? " (self)" : ""
-                );
+                if (config.process_name[0] != '\0')
+                {
+                    if (monitored_process_pid > 0)
+                    {
+                        printf(
+                            "Monitoring process: %s (PID: %d)\n",
+                            config.process_name,
+                            monitored_process_pid
+                        );
+                    }
+                    else
+                    {
+                        printf(
+                            "Waiting for process: %s\n",
+                            config.process_name
+                        );
+                    }
+                }
+                else
+                {
+                    printf(
+                        "Monitoring process PID: %d%s\n",
+                        monitored_process_pid,
+                        config.process_pid == 0 ? " (self)" : ""
+                    );
+                }
             }
         }
+
+    /*
+     * 使用进程名称监控时，如果当前没有有效 PID，
+     * 就重新扫描 /proc 查找目标进程。
+     */
+    if (
+        config.process_name[0] != '\0' &&
+        monitored_process_pid == 0
+    ) {
+        if (
+            find_process_by_name(
+                config.process_name,
+                &monitored_process_pid
+            ) == 0
+        ) {
+            printf(
+                "Target process found: %s (PID: %d)\n",
+                config.process_name,
+                monitored_process_pid
+            );
+
+            /*
+             * 新找到的 PID 代表一个新的进程实例。
+             * 旧进程的 CPU 和内存比较基准不能继续使用。
+             */
+            process_cpu_sample_initialized = 0;
+            process_cpu_usage_valid = 0;
+            process_cpu_level_initialized = 0;
+            process_memory_level_initialized = 0;
+        }
+    }
 
 	/*
 	 * 读取目标进程的信息。
 	 */
-	if (
-	    read_process_info(
-	        monitored_process_pid,
-	        &process_info
-	    ) != 0
-	)
-	{
-	    process_available = 0;
-	}
-	else
-	{
-	    process_available = 1;
-
+    if (
+        monitored_process_pid <= 0 ||
+        read_process_info(
+            monitored_process_pid,
+            &process_info
+        ) != 0
+    )
+    {
+        process_available = 0;
+    }
+    else
+    {
+        process_available = 1;
         /*
          * /proc/<pid>/status 中的 VmRSS 单位是 kB。
          * 1024 kB = 1 MiB。
@@ -1623,6 +1742,17 @@ int main(int argc, char *argv[])
          * 分隔不同采样周期的输出。
          */
         printf("---------------------------------\n");
+
+        /*
+         * 使用名称监控时，如果目标进程已经不可用，
+         * 清除旧 PID，让下一轮重新按名称查找。
+         */
+        if (
+            config.process_name[0] != '\0' &&
+            !process_available
+        ) {
+            monitored_process_pid = 0;
+        }
 
         /*
          * 当前 CPU 采样成为下一轮的前一次采样。

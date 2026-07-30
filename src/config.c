@@ -74,6 +74,7 @@ void config_set_defaults(AppConfig *config)
     config->monitor_interval = 1;
 
     config->process_pid = 0;
+    config->process_name[0] = '\0';
 
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
@@ -329,6 +330,22 @@ static int config_set_value(
         }
 
         config->process_pid = unsigned_int_value;
+    } else if (strcmp(key, "process_name") == 0) {
+        value_length = strlen(value);
+
+        /*
+         * 进程名称必须能够完整放入字符数组，
+         * 并为字符串结束符 '\0' 保留一个位置。
+         */
+        if (value_length >= sizeof(config->process_name)) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        memcpy(
+            config->process_name,
+            value,
+            value_length + 1
+        );
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
     ) {
@@ -871,14 +888,42 @@ void config_print(const AppConfig *config)
     printf("monitor_interval          : %u second(s)\n",
            config->monitor_interval);
 
-    printf("process_pid               : %u",
-       config->process_pid);
-
-    if (config->process_pid == 0) {
-        printf(" (self)");
+    if (config->process_name[0] != '\0') {
+        /*
+         * 配置了 process_name 时，
+         * process_name 的优先级高于 process_pid。
+         */
+        printf(
+            "process_pid               : %u "
+            "(ignored: process_name has priority)\n",
+            config->process_pid
+        );
+    } else if (config->process_pid == 0) {
+        /*
+         * 没有配置 process_name，并且 process_pid 为 0，
+         * 才表示监控 EdgeSentinel 自身。
+         */
+        printf(
+            "process_pid               : %u (self)\n",
+            config->process_pid
+        );
+    } else {
+        /*
+         * 没有配置 process_name，
+         * 使用配置文件中的固定 PID。
+         */
+        printf(
+            "process_pid               : %u\n",
+            config->process_pid
+        );
     }
 
-    printf("\n");
+    printf(
+        "process_name              : %s\n",
+        config->process_name[0] != '\0'
+            ? config->process_name
+            : "(not set)"
+    );
 
     printf("cpu_warning_threshold     : %.2f%%\n",
            config->cpu_warning_threshold);
