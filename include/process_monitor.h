@@ -154,6 +154,25 @@ int monitored_process_init(
 );
 
 /*
+ * 重置目标进程的运行时监控状态。
+ *
+ * 保留：
+ *     target_name
+ *     configured_pid
+ *     current_pid
+ *
+ * 清除：
+ *     进程信息
+ *     CPU 和内存数据
+ *     上一次 CPU 采样
+ *     可用状态
+ *     告警等级及初始化标志
+ */
+void monitored_process_reset_runtime_state(
+    MonitoredProcess *process
+);
+
+/*
  * 从 /proc/<pid>/status 中读取进程基本信息。
  */
 int read_process_info(
@@ -180,5 +199,9 @@ double calculate_process_cpu_usage(
 
 
 int find_process_by_name(const char *process_name, int *pid);
+
+void monitored_process_reset_cpu_sampling(
+    MonitoredProcess *process
+);
 
 #endif

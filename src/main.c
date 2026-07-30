@@ -663,12 +663,10 @@ int main(int argc, char *argv[])
                  * 目标进程可能已经改变，
                  * 旧进程的采样数据不能继续用于新进程。
                  */
-                monitored_process.cpu_sample_initialized = 0;
-                monitored_process.cpu_usage_valid = 0;
-                monitored_process.availability_initialized = 0;
-                monitored_process.cpu_level_initialized = 0;
-                monitored_process.memory_level_initialized = 0;
-
+                
+                monitored_process_reset_runtime_state(
+                    &monitored_process
+                );
                 printf("Configuration reloaded successfully.\n");
                 config_print(&config);
 
@@ -725,10 +723,10 @@ int main(int argc, char *argv[])
              * 新找到的 PID 代表一个新的进程实例。
              * 旧进程的 CPU 和内存比较基准不能继续使用。
              */
-            monitored_process.cpu_sample_initialized = 0;
-            monitored_process.cpu_usage_valid = 0;
-            monitored_process.cpu_level_initialized = 0;
-            monitored_process.memory_level_initialized = 0;
+
+            monitored_process_reset_runtime_state(
+                &monitored_process
+            );
         }
     }
 
@@ -849,8 +847,10 @@ int main(int argc, char *argv[])
              * 进程可能刚好在读取期间退出。
              * 清除原有采样基准。
              */
-            monitored_process.cpu_sample_initialized = 0;
-            monitored_process.cpu_level_initialized = 0;
+            monitored_process_reset_cpu_sampling(
+                &monitored_process
+            );
+
             monitored_process.memory_level_initialized = 0;
         }
         else
@@ -1009,8 +1009,9 @@ int main(int argc, char *argv[])
         /*
          * 进程不可用后，旧的累计值不能继续使用。
          */
-        monitored_process.cpu_sample_initialized = 0;
-        monitored_process.cpu_level_initialized = 0;
+        monitored_process_reset_cpu_sampling(
+            &monitored_process
+        );
     }
 
 	/*

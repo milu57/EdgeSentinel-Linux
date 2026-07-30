@@ -93,6 +93,107 @@ int monitored_process_init(
 }
 
 /*
+ * 重置目标进程的运行时监控状态。
+ */
+void monitored_process_reset_runtime_state(
+    MonitoredProcess *process
+)
+{
+    /*
+     * 空指针没有可以重置的对象。
+     */
+    if (process == NULL) {
+        return;
+    }
+
+    /*
+     * 清除本次读取到的进程基本信息。
+     */
+    memset(
+        &process->info,
+        0,
+        sizeof(process->info)
+    );
+
+    /*
+     * 清除 CPU 和内存数值。
+     */
+    process->memory_mib = 0.0;
+    process->cpu_usage = 0.0;
+
+    /*
+     * 清除上一次 CPU 累计时间和采样时间。
+     */
+    memset(
+        &process->previous_cpu_times,
+        0,
+        sizeof(process->previous_cpu_times)
+    );
+
+    memset(
+        &process->previous_cpu_sample_time,
+        0,
+        sizeof(process->previous_cpu_sample_time)
+    );
+
+    /*
+     * 清除 CPU 采样状态。
+     */
+    process->cpu_sample_initialized = 0;
+    process->cpu_usage_valid = 0;
+
+    /*
+     * 清除进程可用状态。
+     */
+    process->available = 0;
+    process->previous_available = 0;
+    process->availability_initialized = 0;
+
+    /*
+     * 重置 CPU 告警状态。
+     */
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+    process->cpu_level_initialized = 0;
+
+    /*
+     * 重置内存告警状态。
+     */
+    process->memory_level = ALERT_NORMAL;
+    process->previous_memory_level = ALERT_NORMAL;
+    process->memory_level_initialized = 0;
+}
+
+void monitored_process_reset_cpu_sampling(
+    MonitoredProcess *process
+)
+{
+    if (process == NULL) {
+        return;
+    }
+
+    memset(
+        &process->previous_cpu_times,
+        0,
+        sizeof(process->previous_cpu_times)
+    );
+
+    memset(
+        &process->previous_cpu_sample_time,
+        0,
+        sizeof(process->previous_cpu_sample_time)
+    );
+
+    process->cpu_usage = 0.0;
+    process->cpu_sample_initialized = 0;
+    process->cpu_usage_valid = 0;
+
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+    process->cpu_level_initialized = 0;
+}
+
+/*
  * 从 /proc/<pid>/status 中读取指定进程的信息。
  *
  * 成功返回 0。
