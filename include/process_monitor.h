@@ -10,6 +10,8 @@
  */
 #define PROCESS_NAME_LENGTH 256
 
+#define MAX_MONITORED_PROCESSES 8
+
 /*
  * 进程状态字符串缓冲区大小。
  */
