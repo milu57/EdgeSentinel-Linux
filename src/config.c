@@ -880,6 +880,8 @@ static int validate_process_memory_threshold_pair(
  */
 int config_validate(const AppConfig *config)
 {
+    unsigned int process_index;
+
     if (config == NULL) {
         fprintf(stderr, "Configuration pointer is NULL\n");
         return -1;
@@ -896,6 +898,68 @@ int config_validate(const AppConfig *config)
         );
 
         return -1;
+    }
+
+    /*
+     * 进程名称数量不能超过数组容量。
+     */
+    if (
+        config->process_name_count >
+        CONFIG_MAX_PROCESS_NAMES
+    ) {
+        fprintf(
+            stderr,
+            "Invalid process_name_count: %u "
+            "exceeds maximum %d\n",
+            config->process_name_count,
+            CONFIG_MAX_PROCESS_NAMES
+        );
+
+        return -1;
+    }
+
+    /*
+     * 检查 process_names 中每一个有效名称。
+     */
+    for (
+        process_index = 0;
+        process_index < config->process_name_count;
+        process_index++
+    ) {
+        /*
+         * 进程名称不能为空。
+         */
+        if (
+            config->process_names[process_index][0] == '\0'
+        ) {
+            fprintf(
+                stderr,
+                "Invalid process_names[%u]: name is empty\n",
+                process_index
+            );
+
+            return -1;
+        }
+
+        /*
+         * 名称必须在字符数组范围内包含字符串结束符。
+         */
+        if (
+            memchr(
+                config->process_names[process_index],
+                '\0',
+                CONFIG_PROCESS_NAME_LENGTH
+            ) == NULL
+        ) {
+            fprintf(
+                stderr,
+                "Invalid process_names[%u]: "
+                "name is not null-terminated\n",
+                process_index
+            );
+
+            return -1;
+        }
     }
 
     if (

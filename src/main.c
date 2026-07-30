@@ -1120,113 +1120,179 @@ int main(int argc, char *argv[])
                  */
                 config = reloaded_config;
 
-                /*
-                 * 根据新的 process_pid，
-                 * 重新确定要监控的目标进程。
+                                /*
+                 * 根据新配置重新确定实际监控进程数量。
                  */
-                if (config.process_name[0] != '\0')
+                if (config.process_name_count > 0)
                 {
-                    /*
-                     * 配置了进程名称时，
-                     * 根据名称查找当前对应的 PID。
-                     */
-                    if (
-                        find_process_by_name(
-                            config.process_name,
-                            &active_process->current_pid
-                        ) != 0
-                    )
-                    {
-                        /*
-                         * 当前没有找到目标进程。
-                         * PID 设置为 0，主循环后续继续搜索。
-                         */
-                        active_process->current_pid = 0;
-                    }
-                }
-                else if (config.process_pid == 0)
-                {
-                    /*
-                     * 没有配置名称，并且 PID 为 0，
-                     * 监控 EdgeSentinel 自身。
-                     */
-                    active_process->current_pid = (int)getpid();
+                    monitored_process_count =
+                        (size_t)config.process_name_count;
                 }
                 else
                 {
                     /*
-                     * 没有配置名称时，使用固定 PID。
+                     * 没有 process_names 时，
+                     * 继续兼容原来的单进程配置。
                      */
-                    active_process->current_pid = (int)config.process_pid;
+                    monitored_process_count = 1;
                 }
-                /*
-                 * 目标进程可能已经改变，
-                 * 旧进程的采样数据不能继续用于新进程。
-                 */
-                
-                monitored_process_reset_runtime_state(
-                    active_process
-                );
-                printf("Configuration reloaded successfully.\n");
-                config_print(&config);
 
-                if (config.process_name[0] != '\0')
+                /*
+                 * 防止监控数量超过数组容量。
+                 */
+                if (
+                    monitored_process_count >
+                    MAX_MONITORED_PROCESSES
+                )
                 {
+                    fprintf(
+                        stderr,
+                        "Too many monitored processes after reload: "
+                        "%zu (maximum: %d)\n",
+                        monitored_process_count,
+                        MAX_MONITORED_PROCESSES
+                    );
+
+                    return 1;
+                }
+
+                /*
+                 * 根据新配置重新初始化所有进程监控对象。
+                 *
+                 * 重新初始化后，旧 PID、CPU 采样和告警状态
+                 * 不会继续影响新的目标进程。
+                 */
+                for (
+                    process_index = 0;
+                    process_index < monitored_process_count;
+                    process_index++
+                )
+                {
+                    const char *target_process_name;
+
+                    if (config.process_name_count > 0)
+                    {
+                        target_process_name =
+                            config.process_names[process_index];
+                    }
+                    else
+                    {
+                        target_process_name =
+                            config.process_name;
+                    }
+
+                    initial_process_pid = 0;
+
                     /*
-                     * 输出所有目标进程的启动状态。
+                     * 使用名称监控时，查找当前对应的 PID。
                      */
-                    for (
-                        process_index = 0;
-                        process_index < monitored_process_count;
-                        process_index++
+                    if (target_process_name[0] != '\0')
+                    {
+                        if (
+                            find_process_by_name(
+                                target_process_name,
+                                &initial_process_pid
+                            ) != 0
+                        )
+                        {
+                            initial_process_pid = 0;
+                        }
+                    }
+                    /*
+                     * 没有名称且 PID 为 0 时，监控自身。
+                     */
+                    else if (config.process_pid == 0)
+                    {
+                        initial_process_pid =
+                            (int)getpid();
+                    }
+                    /*
+                     * 使用配置中的固定 PID。
+                     */
+                    else
+                    {
+                        initial_process_pid =
+                            (int)config.process_pid;
+                    }
+
+                    if (
+                        monitored_process_init(
+                            &monitored_processes[process_index],
+                            target_process_name,
+                            (int)config.process_pid,
+                            initial_process_pid
+                        ) != 0
                     )
                     {
-                        active_process =
-                            &monitored_processes[process_index];
+                        fprintf(
+                            stderr,
+                            "Failed to initialize reloaded "
+                            "monitored process %zu.\n",
+                            process_index
+                        );
 
-                        if (active_process->target_name[0] != '\0')
+                        return 1;
+                    }
+                }
+
+                /*
+                 * 默认指向数组中的第一个进程。
+                 */
+                active_process =
+                    &monitored_processes[0];
+
+                printf(
+                    "Configuration reloaded successfully.\n"
+                );
+
+                config_print(&config);
+
+                /*
+                 * 输出热加载后的所有目标进程。
+                 */
+                for (
+                    process_index = 0;
+                    process_index < monitored_process_count;
+                    process_index++
+                )
+                {
+                    active_process =
+                        &monitored_processes[process_index];
+
+                    if (active_process->target_name[0] != '\0')
+                    {
+                        if (active_process->current_pid > 0)
                         {
-                            if (active_process->current_pid > 0)
-                            {
-                                printf(
-                                    "Monitoring process[%zu]: %s (PID: %d)\n",
-                                    process_index,
-                                    active_process->target_name,
-                                    active_process->current_pid
-                                );
-                            }
-                            else
-                            {
-                                printf(
-                                    "Waiting for process[%zu]: %s\n",
-                                    process_index,
-                                    active_process->target_name
-                                );
-                            }
+                            printf(
+                                "Monitoring process[%zu]: "
+                                "%s (PID: %d)\n",
+                                process_index,
+                                active_process->target_name,
+                                active_process->current_pid
+                            );
                         }
                         else
                         {
                             printf(
-                                "Monitoring process[%zu] PID: %d%s\n",
+                                "Waiting for process[%zu]: %s\n",
                                 process_index,
-                                active_process->current_pid,
-                                active_process->configured_pid == 0
-                                    ? " (self)"
-                                    : ""
+                                active_process->target_name
                             );
                         }
                     }
-
-
+                    else
+                    {
+                        printf(
+                            "Monitoring process[%zu] PID: %d%s\n",
+                            process_index,
+                            active_process->current_pid,
+                            active_process->configured_pid == 0
+                                ? " (self)"
+                                : ""
+                        );
+                    }
                 }
-                else
-                {
-                    printf(
-                        "Monitoring process PID: %d%s\n",
-                        active_process->current_pid,
-                        config.process_pid == 0 ? " (self)" : ""
-                    );
-                }
+
             }
         }
 
