@@ -76,6 +76,14 @@ void config_set_defaults(AppConfig *config)
     config->process_pid = 0;
     config->process_name[0] = '\0';
 
+    memset(
+        config->process_names,
+        0,
+        sizeof(config->process_names)
+    );
+
+    config->process_name_count = 0;
+
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
 
@@ -346,6 +354,97 @@ static int config_set_value(
             value,
             value_length + 1
         );
+    } else if (strcmp(key, "process_names") == 0) {
+        char names_buffer[
+            CONFIG_MAX_PROCESS_NAMES *
+            CONFIG_PROCESS_NAME_LENGTH
+        ];
+
+        char parsed_names
+            [CONFIG_MAX_PROCESS_NAMES]
+            [CONFIG_PROCESS_NAME_LENGTH] = {{0}};
+
+        char *name_token;
+        unsigned int name_count = 0;
+        size_t names_length;
+        size_t name_length;
+
+        /*
+         * 先复制配置字符串，因为 strtok() 会修改字符串内容。
+         */
+        names_length = strlen(value);
+
+        if (names_length >= sizeof(names_buffer)) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        memcpy(
+            names_buffer,
+            value,
+            names_length + 1
+        );
+
+        /*
+         * 使用逗号分割多个进程名称。
+         *
+         * 示例：
+         *     sleep,bash,sshd
+         */
+        name_token = strtok(names_buffer, ",");
+
+        while (name_token != NULL) {
+            if (name_count >= CONFIG_MAX_PROCESS_NAMES) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            name_length = strlen(name_token);
+
+            if (
+                name_length == 0 ||
+                name_length >= CONFIG_PROCESS_NAME_LENGTH
+            ) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            memcpy(
+                parsed_names[name_count],
+                name_token,
+                name_length + 1
+            );
+
+            name_count++;
+
+            name_token = strtok(NULL, ",");
+        }
+
+        /*
+         * process_names 不能为空。
+         */
+        if (name_count == 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        /*
+         * 所有名称解析成功后，再写入正式配置结构体。
+         */
+        memcpy(
+            config->process_names,
+            parsed_names,
+            sizeof(parsed_names)
+        );
+
+        config->process_name_count = name_count;
+
+        /*
+         * 暂时让旧 process_name 保存第一个名称，
+         * 保持现有单进程代码继续正常工作。
+         */
+        memcpy(
+            config->process_name,
+            config->process_names[0],
+            strlen(config->process_names[0]) + 1
+        );
+
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
     ) {
@@ -880,6 +979,8 @@ int config_validate(const AppConfig *config)
  */
 void config_print(const AppConfig *config)
 {
+    unsigned int process_index;
+
     if (config == NULL) {
         return;
     }
@@ -924,6 +1025,24 @@ void config_print(const AppConfig *config)
             ? config->process_name
             : "(not set)"
     );
+
+    printf(
+        "process_name_count        : %u\n",
+        config->process_name_count
+    );
+
+    for (
+        process_index = 0;
+        process_index < config->process_name_count;
+        process_index++
+    )
+    {
+        printf(
+            "process_names[%u]         : %s\n",
+            process_index,
+            config->process_names[process_index]
+        );
+    }
 
     printf("cpu_warning_threshold     : %.2f%%\n",
            config->cpu_warning_threshold);

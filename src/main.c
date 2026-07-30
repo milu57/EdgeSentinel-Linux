@@ -565,7 +565,7 @@ int main(int argc, char *argv[])
      * 后面再逐步接管 CPU、内存和告警状态。
      */
     MonitoredProcess monitored_processes[MAX_MONITORED_PROCESSES];
-    size_t monitored_process_count = 1;
+    size_t monitored_process_count = 0;
     size_t process_index;
     MonitoredProcess *active_process;
 
@@ -631,49 +631,109 @@ int main(int argc, char *argv[])
         config_set_defaults(&config);
     }
 
-    /*
-     * 确定程序启动时的目标进程 PID。
-     *
-     * 此时 monitored_process[0] 还没有初始化，
-     * 因此先把 PID 保存到临时变量中。
+        /*
+     * 根据配置确定实际监控进程数量。
      */
-    if (config.process_name[0] != '\0') {
-        if (
-            find_process_by_name(
-                config.process_name,
-                &initial_process_pid
-            ) != 0
-        ) {
-            initial_process_pid = 0;
-
-            printf(
-                "Target process is not running yet: %s\n",
-                config.process_name
-            );
-        }
-    } else if (config.process_pid == 0) {
-        initial_process_pid = (int)getpid();
-    } else {
-        initial_process_pid = (int)config.process_pid;
+    if (config.process_name_count > 0)
+    {
+        monitored_process_count =
+            (size_t)config.process_name_count;
+    }
+    else
+    {
+        /*
+         * 没有 process_names 时，
+         * 继续兼容原来的单进程配置。
+         */
+        monitored_process_count = 1;
     }
 
     /*
-     * 使用刚刚确定的配置和 PID，
-     * 初始化目标进程监控对象。
+     * 防止监控数量超过数组容量。
+     */
+    if (
+        monitored_process_count >
+        MAX_MONITORED_PROCESSES
+    )
+    {
+        fprintf(
+            stderr,
+            "Too many monitored processes: %zu "
+            "(maximum: %d)\n",
+            monitored_process_count,
+            MAX_MONITORED_PROCESSES
+        );
+
+        return 1;
+    }
+
+    /*
+     * 依次初始化每个进程监控对象。
      */
     for (
         process_index = 0;
         process_index < monitored_process_count;
         process_index++
-    ) {
+    )
+    {
+        const char *target_process_name;
+
+        /*
+         * 使用多进程配置时，
+         * 每个数组元素取得自己的进程名称。
+         */
+        if (config.process_name_count > 0)
+        {
+            target_process_name =
+                config.process_names[process_index];
+        }
+        else
+        {
+            target_process_name =
+                config.process_name;
+        }
+
+        /*
+         * 为当前目标进程查找初始 PID。
+         */
+        initial_process_pid = 0;
+
+        if (target_process_name[0] != '\0')
+        {
+            if (
+                find_process_by_name(
+                    target_process_name,
+                    &initial_process_pid
+                ) != 0
+            )
+            {
+                initial_process_pid = 0;
+
+                printf(
+                    "Target process is not running yet: %s\n",
+                    target_process_name
+                );
+            }
+        }
+        else if (config.process_pid == 0)
+        {
+            initial_process_pid = (int)getpid();
+        }
+        else
+        {
+            initial_process_pid =
+                (int)config.process_pid;
+        }
+
         if (
             monitored_process_init(
                 &monitored_processes[process_index],
-                config.process_name,
+                target_process_name,
                 (int)config.process_pid,
                 initial_process_pid
             ) != 0
-        ) {
+        )
+        {
             fprintf(
                 stderr,
                 "Failed to initialize monitored process %zu.\n",
@@ -683,7 +743,7 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
-    
+
     active_process = &monitored_processes[0];
 
 
@@ -929,19 +989,50 @@ int main(int argc, char *argv[])
     }
 
     printf("EdgeSentinel system monitor started.\n");
-    
-        if (config.process_name[0] != '\0') {
-        printf(
-            "Monitoring process: %s (PID: %d)\n",
-            config.process_name,
-            active_process->current_pid
-        );
-    } else {
-        printf(
-            "Monitoring process PID: %d%s\n",
-            active_process->current_pid,
-            config.process_pid == 0 ? " (self)" : ""
-        );
+
+    /*
+     * 输出所有目标进程的启动状态。
+     */
+    for (
+        process_index = 0;
+        process_index < monitored_process_count;
+        process_index++
+    )
+    {
+        active_process =
+            &monitored_processes[process_index];
+
+        if (active_process->target_name[0] != '\0')
+        {
+            if (active_process->current_pid > 0)
+            {
+                printf(
+                    "Monitoring process[%zu]: %s (PID: %d)\n",
+                    process_index,
+                    active_process->target_name,
+                    active_process->current_pid
+                );
+            }
+            else
+            {
+                printf(
+                    "Waiting for process[%zu]: %s\n",
+                    process_index,
+                    active_process->target_name
+                );
+            }
+        }
+        else
+        {
+            printf(
+                "Monitoring process[%zu] PID: %d%s\n",
+                process_index,
+                active_process->current_pid,
+                active_process->configured_pid == 0
+                    ? " (self)"
+                    : ""
+            );
+        }
     }
 
     printf("Monitoring disk mount point: /\n");
@@ -1081,21 +1172,52 @@ int main(int argc, char *argv[])
 
                 if (config.process_name[0] != '\0')
                 {
-                    if (active_process->current_pid > 0)
+                    /*
+                     * 输出所有目标进程的启动状态。
+                     */
+                    for (
+                        process_index = 0;
+                        process_index < monitored_process_count;
+                        process_index++
+                    )
                     {
-                        printf(
-                            "Monitoring process: %s (PID: %d)\n",
-                            config.process_name,
-                            active_process->current_pid
-                        );
+                        active_process =
+                            &monitored_processes[process_index];
+
+                        if (active_process->target_name[0] != '\0')
+                        {
+                            if (active_process->current_pid > 0)
+                            {
+                                printf(
+                                    "Monitoring process[%zu]: %s (PID: %d)\n",
+                                    process_index,
+                                    active_process->target_name,
+                                    active_process->current_pid
+                                );
+                            }
+                            else
+                            {
+                                printf(
+                                    "Waiting for process[%zu]: %s\n",
+                                    process_index,
+                                    active_process->target_name
+                                );
+                            }
+                        }
+                        else
+                        {
+                            printf(
+                                "Monitoring process[%zu] PID: %d%s\n",
+                                process_index,
+                                active_process->current_pid,
+                                active_process->configured_pid == 0
+                                    ? " (self)"
+                                    : ""
+                            );
+                        }
                     }
-                    else
-                    {
-                        printf(
-                            "Waiting for process: %s\n",
-                            config.process_name
-                        );
-                    }
+
+
                 }
                 else
                 {
@@ -1587,66 +1709,76 @@ int main(int argc, char *argv[])
             alert_level_to_string(system_level)
         );
 
-	/*
-	 * 输出 EdgeSentinel 自身进程的信息。
-	 */
-	/*
-	 * 只有目标进程读取成功时，
-	 * 才访问 active_process->info 中的数据。
-	 */
-	if (active_process->available)
-	{
-	    printf(
-	        "Process:          %s PID=%d PPID=%d\n",
-	        active_process->info.name,
-	        active_process->info.pid,
-	        active_process->info.parent_pid
-	    );
-	
-	    printf(
-	        "Process State:    %s\n",
-	        active_process->info.state
-	    );
-	
-	    printf(
-	        "Process Memory:   %.2f MiB [%s]\n",
-            active_process->memory_mib,
-            alert_level_to_string(active_process->memory_level)
-	    );
-
-    if (active_process->cpu_usage_valid)
-    {
-        printf(
-            "Process CPU:      %6.2f%% [%s]\n",
-            active_process->cpu_usage,
-            alert_level_to_string(active_process->cpu_level)
-        );
-    }
-    else if (active_process->cpu_sample_initialized)
-    {
         /*
-         * 第一次采样已经取得，
-         * 但还没有第二次数据用于计算。
+         * 依次输出所有被监控进程的状态。
          */
-        printf(
-            "Process CPU:      [COLLECTING]\n"
-        );
-    }
-    else
-    {
-        printf(
-            "Process CPU:      [UNAVAILABLE]\n"
-        );
-    }
+        for (
+            process_index = 0;
+            process_index < monitored_process_count;
+            process_index++
+        )
+        {
+            active_process =
+                &monitored_processes[process_index];
 
-	}
-	else
-	{
-	    printf(
-	        "Process:          PID=%d [UNAVAILABLE]\n",
-	        active_process->current_pid
-	    );
-	}
+            if (active_process->available)
+            {
+                printf(
+                    "Process[%zu]:       %s PID=%d PPID=%d\n",
+                    process_index,
+                    active_process->info.name,
+                    active_process->info.pid,
+                    active_process->info.parent_pid
+                );
+
+                printf(
+                    "  State:           %s\n",
+                    active_process->info.state
+                );
+
+                printf(
+                    "  Memory:          %.2f MiB [%s]\n",
+                    active_process->memory_mib,
+                    alert_level_to_string(
+                        active_process->memory_level
+                    )
+                );
+
+                if (active_process->cpu_usage_valid)
+                {
+                    printf(
+                        "  CPU:             %.2f%% [%s]\n",
+                        active_process->cpu_usage,
+                        alert_level_to_string(
+                            active_process->cpu_level
+                        )
+                    );
+                }
+                else if (active_process->cpu_sample_initialized)
+                {
+                    printf(
+                        "  CPU:            [COLLECTING]\n"
+                    );
+                }
+                else
+                {
+                    printf(
+                        "  CPU:            [UNAVAILABLE]\n"
+                    );
+                }
+            }
+            else
+            {
+                printf(
+                    "Process[%zu]:       %s PID=%d [UNAVAILABLE]\n",
+                    process_index,
+                    active_process->target_name[0] != '\0'
+                        ? active_process->target_name
+                        : "(PID target)",
+                    active_process->current_pid
+                );
+            }
+        }
 
         /*
          * 输出磁盘总容量。

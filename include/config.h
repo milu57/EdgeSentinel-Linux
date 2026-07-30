@@ -2,6 +2,8 @@
 #define CONFIG_H
 
 #define CONFIG_PATH_LENGTH 256
+#define CONFIG_MAX_PROCESS_NAMES 8
+#define CONFIG_PROCESS_NAME_LENGTH 256
 
 /*
  * EdgeSentinel-Linux 全局配置
@@ -20,7 +22,29 @@ typedef struct {
      *     监控指定 PID 的进程。
      */
     unsigned int process_pid;
-    char process_name[256];
+    /*
+     * 旧的单进程名称配置。
+     *
+     * 暂时保留，用于兼容当前代码；
+     * 后续迁移完成后再删除。
+     */
+    char process_name[CONFIG_PROCESS_NAME_LENGTH];
+
+    /*
+     * 多进程名称列表。
+     *
+     * process_names[0] 表示第一个进程名称；
+     * process_names[1] 表示第二个进程名称；
+     * 以此类推。
+     */
+    char process_names
+        [CONFIG_MAX_PROCESS_NAMES]
+        [CONFIG_PROCESS_NAME_LENGTH];
+
+    /*
+     * process_names 数组中实际保存了多少个名称。
+     */
+    unsigned int process_name_count;
 
     /* CPU 告警阈值 */
     double cpu_warning_threshold;
