@@ -90,3 +90,25 @@ add_test(
     NAME alert_test
     COMMAND test_alert
 )
+
+
+# Build the logger module test program.
+add_executable(test_logger
+    tests/test_logger.c
+    src/logger.c
+)
+
+target_include_directories(test_logger PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_logger PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME logger_test
+    COMMAND test_logger
+)
