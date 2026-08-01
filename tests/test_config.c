@@ -1656,6 +1656,121 @@ static int test_invalid_config_lines_rejected(void)
 }
 
 
+
+/*
+ * 测试配置项名称或配置值为空时，
+ * config_load() 是否拒绝配置。
+ */
+static int test_empty_key_or_value_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_empty_key_value.conf";
+
+    const char *invalid_lines[] = {
+        "monitor_interval=",
+        "=3",
+        "process_names="
+    };
+
+    const unsigned int invalid_line_count =
+        sizeof(invalid_lines) /
+        sizeof(invalid_lines[0]);
+
+    FILE *file;
+    AppConfig config;
+    unsigned int case_index;
+    int load_result;
+
+    for (
+        case_index = 0;
+        case_index < invalid_line_count;
+        case_index++
+    ) {
+        config_set_defaults(&config);
+
+        config.monitor_interval = 23;
+        config.process_pid = 9753;
+
+        file = fopen(test_filename, "w");
+
+        if (file == NULL) {
+            perror("fopen");
+            return -1;
+        }
+
+        if (
+            fprintf(
+                file,
+                "monitor_interval=30\n"
+                "%s\n",
+                invalid_lines[case_index]
+            ) < 0
+        ) {
+            fprintf(
+                stderr,
+                "failed to write empty key or value configuration\n"
+            );
+
+            fclose(file);
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (fclose(file) != 0) {
+            perror("fclose");
+            remove(test_filename);
+
+            return -1;
+        }
+
+        load_result = config_load(test_filename, &config);
+
+        if (remove(test_filename) != 0) {
+            perror("remove");
+            return -1;
+        }
+
+        if (load_result == 0) {
+            fprintf(
+                stderr,
+                "config_load accepted empty key or value: %s\n",
+                invalid_lines[case_index]
+            );
+
+            return -1;
+        }
+
+        /*
+         * 前面的合法配置也不能部分生效。
+         */
+        if (config.monitor_interval != 23) {
+            fprintf(
+                stderr,
+                "empty key or value changed monitor_interval: %u\n",
+                config.monitor_interval
+            );
+
+            return -1;
+        }
+
+        if (config.process_pid != 9753) {
+            fprintf(
+                stderr,
+                "empty key or value changed process_pid: %u\n",
+                config.process_pid
+            );
+
+            return -1;
+        }
+    }
+
+    printf("empty key or value rejection test passed\n");
+
+    return 0;
+}
+
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -1781,6 +1896,15 @@ int main(void)
         fprintf(
             stderr,
             "invalid configuration lines rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_empty_key_or_value_rejected() != 0) {
+        fprintf(
+            stderr,
+            "empty key or value rejection test failed\n"
         );
 
         return 1;
