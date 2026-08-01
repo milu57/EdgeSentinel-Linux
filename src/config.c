@@ -366,6 +366,7 @@ static int config_set_value(
 
         char *name_token;
         unsigned int name_count = 0;
+        unsigned int existing_name_index;
         size_t names_length;
         size_t name_length;
 
@@ -429,6 +430,30 @@ static int config_set_value(
                 name_length >= CONFIG_PROCESS_NAME_LENGTH
             ) {
                 return CONFIG_VALUE_INVALID;
+            }
+
+            /*
+             * 检查当前名称是否已经出现过。
+             *
+             * 例如：
+             *     sleep,bash,sleep
+             *
+             * 第三个 sleep 与第一个 sleep 相同，
+             * 因此整个配置应当被拒绝。
+             */
+            for (
+                existing_name_index = 0;
+                existing_name_index < name_count;
+                existing_name_index++
+            ) {
+                if (
+                    strcmp(
+                        parsed_names[existing_name_index],
+                        name_token
+                    ) == 0
+                ) {
+                    return CONFIG_VALUE_INVALID;
+                }
             }
 
             memcpy(

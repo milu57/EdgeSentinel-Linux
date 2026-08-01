@@ -990,6 +990,145 @@ static int test_edge_empty_process_names_rejected(void)
     return 0;
 }
 
+
+/*
+ * 测试 process_names 中出现重复名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,bash,sleep 中 sleep 出现了两次。
+ * 如果允许这种配置，程序会重复监控同一个目标进程。
+ */
+static int test_duplicate_process_names_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_duplicate_names.conf";
+
+    FILE *file;
+    AppConfig config;
+    int load_result;
+
+    /*
+     * 设置一份原有配置。
+     * 非法配置加载失败后，
+     * 原有配置必须保持不变。
+     */
+    config_set_defaults(&config);
+
+    config.monitor_interval = 13;
+    config.process_pid = 6789;
+
+    snprintf(
+        config.process_name,
+        sizeof(config.process_name),
+        "%s",
+        "original"
+    );
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "monitor_interval=40\n"
+            "process_names=sleep,bash,sleep\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write duplicate process names configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    load_result = config_load(test_filename, &config);
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    /*
+     * 重复名称必须被拒绝。
+     */
+    if (load_result == 0) {
+        fprintf(
+            stderr,
+            "config_load accepted a duplicate process name\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 非法配置不能部分覆盖原配置。
+     */
+    if (config.monitor_interval != 13) {
+        fprintf(
+            stderr,
+            "failed configuration changed monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_pid != 6789) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_pid: %u\n",
+            config.process_pid
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_name,
+            "original"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name: %s\n",
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 0) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    printf("duplicate process names rejection test passed\n");
+
+    return 0;
+}
+
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -1041,6 +1180,15 @@ int main(void)
         fprintf(
             stderr,
             "edge empty process names rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_duplicate_process_names_rejected() != 0) {
+        fprintf(
+            stderr,
+            "duplicate process names rejection test failed\n"
         );
 
         return 1;
