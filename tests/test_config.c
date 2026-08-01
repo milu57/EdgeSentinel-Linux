@@ -196,6 +196,10 @@ static int test_config_defaults(void)
 
     if (config.disk_warning_threshold != 80.0) {
         fprintf(
+/*
+ * 测试 process_name_count 超过数组容量时，
+ * config_validate() 是否拒绝配置。
+ */
             stderr,
             "unexpected disk warning threshold: %.2f\n",
             config.disk_warning_threshold
@@ -301,6 +305,10 @@ static int test_multiple_process_names(void)
     if (fclose(file) != 0) {
         perror("fclose");
         remove(test_filename);
+/*
+ * 测试 process_name_count 超过数组容量时，
+ * config_validate() 是否拒绝配置。
+ */
 
         return -1;
     }
@@ -1128,6 +1136,34 @@ static int test_duplicate_process_names_rejected(void)
     return 0;
 }
 
+/*
+ * 测试 process_name_count 超过数组容量时，
+ * config_validate() 是否拒绝配置。
+ */
+static int test_process_name_count_validation(void)
+{
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    config.process_name_count =
+        CONFIG_MAX_PROCESS_NAMES + 1;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted excessive "
+            "process_name_count\n"
+        );
+
+        return -1;
+    }
+
+    printf("process name count validation test passed\n");
+
+    return 0;
+}
+
 
 int main(void)
 {
@@ -1193,6 +1229,15 @@ int main(void)
 
         return 1;
     }
+
+    if (test_process_name_count_validation() != 0) {
+        fprintf(
+            stderr,
+            "process name count validation test failed\n"
+        );
+
+        return 1;
+}
 
     printf("all configuration tests passed\n");
 
