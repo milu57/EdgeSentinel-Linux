@@ -1165,6 +1165,91 @@ static int test_process_name_count_validation(void)
 }
 
 
+
+/*
+ * 测试 process_name_count 声明了有效元素数量，
+ * 但 process_names 数组中的某个有效元素为空时，
+ * config_validate() 是否拒绝配置。
+ */
+static int test_empty_process_name_slot_validation(void)
+{
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    config.process_name_count = 2;
+
+    snprintf(
+        config.process_names[0],
+        sizeof(config.process_names[0]),
+        "%s",
+        "sleep"
+    );
+
+    /*
+     * process_names[1] 保持默认的空字符串，
+     * 但 process_name_count 又声明它属于有效范围。
+     */
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted an empty "
+            "process_names element\n"
+        );
+
+        return -1;
+    }
+
+    printf("empty process name slot validation test passed\n");
+
+    return 0;
+}
+
+
+
+/*
+ * 测试进程名称数组中不存在字符串结束符 '\0' 时，
+ * config_validate() 是否拒绝配置。
+ *
+ * C 字符串必须在数组范围内包含 '\0'，
+ * 否则 strlen()、strcmp() 等函数可能越界访问内存。
+ */
+static int test_process_name_null_termination_validation(void)
+{
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    config.process_name_count = 1;
+
+    /*
+     * 使用字符 'A' 填满整个数组，
+     * 故意不保留字符串结束符 '\0'。
+     */
+    memset(
+        config.process_names[0],
+        'A',
+        sizeof(config.process_names[0])
+    );
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted a process name "
+            "without null termination\n"
+        );
+
+        return -1;
+    }
+
+    printf(
+        "process name null termination validation test passed\n"
+    );
+
+    return 0;
+}
+
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -1238,6 +1323,26 @@ int main(void)
 
         return 1;
 }
+
+    if (test_empty_process_name_slot_validation() != 0) {
+        fprintf(
+            stderr,
+            "empty process name slot validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (
+        test_process_name_null_termination_validation() != 0
+    ) {
+        fprintf(
+            stderr,
+            "process name null termination validation test failed\n"
+        );
+
+        return 1;
+    }
 
     printf("all configuration tests passed\n");
 
