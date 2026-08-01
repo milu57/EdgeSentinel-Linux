@@ -68,3 +68,25 @@ add_test(
     NAME config_test
     COMMAND test_config
 )
+
+
+# Build the alert module test program.
+add_executable(test_alert
+    tests/test_alert.c
+    src/alert.c
+)
+
+target_include_directories(test_alert PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_alert PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME alert_test
+    COMMAND test_alert
+)
