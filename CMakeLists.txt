@@ -47,3 +47,145 @@ add_test(
     NAME process_monitor_test
     COMMAND test_process_monitor
 )
+
+# Build the configuration test program.
+add_executable(test_config
+    tests/test_config.c
+    src/config.c
+)
+
+target_include_directories(test_config PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_config PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME config_test
+    COMMAND test_config
+)
+
+
+# Build the alert module test program.
+add_executable(test_alert
+    tests/test_alert.c
+    src/alert.c
+)
+
+target_include_directories(test_alert PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_alert PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME alert_test
+    COMMAND test_alert
+)
+
+
+# Build the logger module test program.
+add_executable(test_logger
+    tests/test_logger.c
+    src/logger.c
+)
+
+target_include_directories(test_logger PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_logger PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME logger_test
+    COMMAND test_logger
+)
+
+
+# Build the system resource smoke test program.
+add_executable(test_system_resources
+    tests/test_system_resources.c
+    src/system_monitor.c
+    src/disk_monitor.c
+    src/system_status.c
+)
+
+target_include_directories(test_system_resources PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_system_resources PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME system_resources_test
+    COMMAND test_system_resources
+)
+
+
+# Build CPU and network calculation tests.
+add_executable(test_calculations
+    tests/test_calculations.c
+    src/cpu_monitor.c
+    src/network.c
+)
+
+target_include_directories(test_calculations PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_calculations PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME calculations_test
+    COMMAND test_calculations
+)
+
+
+# Run the complete EdgeSentinel startup and shutdown test.
+add_test(
+    NAME startup_integration_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_startup.sh"
+        "$<TARGET_FILE:edgesentinel>"
+)
+
+set_tests_properties(
+    startup_integration_test
+    PROPERTIES
+        TIMEOUT 10
+)
+
+
+# Verify fallback to defaults when configuration parsing fails.
+add_test(
+    NAME invalid_config_startup_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_invalid_config_startup.sh"
+        "$<TARGET_FILE:edgesentinel>"
+)
+
+set_tests_properties(
+    invalid_config_startup_test
+    PROPERTIES
+        TIMEOUT 10
+)

@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.6.0**
+**v1.7.0**
 
 ---
 
@@ -1488,9 +1488,46 @@ tail -n 30 logs/edgesentinel.log
 ---
 
 ## 后续计划
-* 增加自动化单元测试；
 * 增加网络接口过滤配置；
 * 增加更多通知和告警方式；
 * 增加 JSON 或其他结构化输出格式；
 * 为 ARM Linux 和边缘设备部署进行适配。
 
+
+---
+
+## v1.7 自动化测试
+
+v1.7 为 EdgeSentinel-Linux 建立了基于 CTest 的自动化测试体系。
+
+运行全部测试：
+
+```bash
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+当前测试包括：
+
+- `process_monitor_test`：进程信息读取、名称查找和 CPU 采样；
+- `config_test`：配置解析、默认值、格式校验和边界条件；
+- `alert_test`：告警等级判断与等级比较；
+- `logger_test`：日志写入、错误参数和日志轮转；
+- `system_resources_test`：内存、磁盘、负载、运行时间和当前时间读取；
+- `calculations_test`：CPU 使用率、网络速度和单位转换；
+- `startup_integration_test`：程序启动、SIGINT 安全退出和日志检查；
+- `invalid_config_startup_test`：非法配置回退到默认配置。
+
+项目还通过 `.github/workflows/ci.yml` 接入了 GitHub Actions。
+
+每次执行 `git push` 或创建 Pull Request 时，GitHub 会自动：
+
+```text
+检出源代码
+配置 CMake
+编译项目
+运行全部 CTest
+```
+
+只有构建和全部测试都成功，GitHub Actions 才会显示绿色状态。
