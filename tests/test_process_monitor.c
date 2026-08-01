@@ -46,6 +46,106 @@ static double calculate_elapsed_seconds(
     return whole_seconds + fractional_seconds;
 }
 
+
+static int test_monitored_process_init(void)
+{
+    MonitoredProcess process;
+
+    if (
+        monitored_process_init(
+            &process,
+            "sleep",
+            0,
+            1234
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "monitored_process_init returned failure\n"
+        );
+        return -1;
+    }
+
+    if (strcmp(process.target_name, "sleep") != 0) {
+        fprintf(
+            stderr,
+            "unexpected target name: %s\n",
+            process.target_name
+        );
+        return -1;
+    }
+
+    if (process.configured_pid != 0) {
+        fprintf(
+            stderr,
+            "unexpected configured PID: %d\n",
+            process.configured_pid
+        );
+        return -1;
+    }
+
+    if (process.current_pid != 1234) {
+        fprintf(
+            stderr,
+            "unexpected current PID: %d\n",
+            process.current_pid
+        );
+        return -1;
+    }
+
+    if (process.cpu_usage != 0.0) {
+        fprintf(
+            stderr,
+            "CPU usage was not initialized to zero\n"
+        );
+        return -1;
+    }
+
+    if (process.memory_mib != 0.0) {
+        fprintf(
+            stderr,
+            "memory usage was not initialized to zero\n"
+        );
+        return -1;
+    }
+
+    if (process.available != 0) {
+        fprintf(
+            stderr,
+            "process availability was not initialized to zero\n"
+        );
+        return -1;
+    }
+
+    if (process.cpu_sample_initialized != 0) {
+        fprintf(
+            stderr,
+            "CPU sample flag was not initialized to zero\n"
+        );
+        return -1;
+    }
+
+    if (process.cpu_level != ALERT_NORMAL) {
+        fprintf(
+            stderr,
+            "unexpected initial CPU alert level\n"
+        );
+        return -1;
+    }
+
+    if (process.memory_level != ALERT_NORMAL) {
+        fprintf(
+            stderr,
+            "unexpected initial memory alert level\n"
+        );
+        return -1;
+    }
+
+    printf("monitored process initialization test passed\n");
+
+    return 0;
+}
+
 /*
  * 持续执行 CPU 密集型计算。
  *
@@ -175,8 +275,232 @@ static int test_find_process_by_name(void)
     return 0;
 }
 
+static int test_monitored_process_reset_runtime_state(void)
+{
+    MonitoredProcess process;
+
+    if (
+        monitored_process_init(
+            &process,
+            "sleep",
+            100,
+            200
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to initialize reset test object\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 人为写入一些运行时状态，
+     * 用于验证重置函数。
+     */
+    process.info.pid = 200;
+    process.memory_mib = 32.0;
+    process.cpu_usage = 50.0;
+
+    process.previous_cpu_times.user_ticks = 100;
+    process.previous_cpu_times.system_ticks = 20;
+
+    process.cpu_sample_initialized = 1;
+    process.cpu_usage_valid = 1;
+
+    process.available = 1;
+    process.previous_available = 1;
+    process.availability_initialized = 1;
+
+    process.cpu_level = ALERT_WARNING;
+    process.previous_cpu_level = ALERT_WARNING;
+    process.cpu_level_initialized = 1;
+
+    process.memory_level = ALERT_CRITICAL;
+    process.previous_memory_level = ALERT_CRITICAL;
+    process.memory_level_initialized = 1;
+
+    monitored_process_reset_runtime_state(&process);
+
+    /*
+     * 目标身份必须保留。
+     */
+    if (
+        strcmp(process.target_name, "sleep") != 0 ||
+        process.configured_pid != 100 ||
+        process.current_pid != 200
+    ) {
+        fprintf(
+            stderr,
+            "process identity was unexpectedly changed\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 运行时状态必须清除。
+     */
+    if (
+        process.info.pid != 0 ||
+        process.memory_mib != 0.0 ||
+        process.cpu_usage != 0.0 ||
+        process.cpu_sample_initialized != 0 ||
+        process.cpu_usage_valid != 0 ||
+        process.available != 0 ||
+        process.previous_available != 0 ||
+        process.availability_initialized != 0 ||
+        process.cpu_level != ALERT_NORMAL ||
+        process.cpu_level_initialized != 0 ||
+        process.memory_level != ALERT_NORMAL ||
+        process.memory_level_initialized != 0
+    ) {
+        fprintf(
+            stderr,
+            "runtime state was not reset correctly\n"
+        );
+
+        return -1;
+    }
+
+    printf(
+        "monitored process runtime reset test passed\n"
+    );
+
+    return 0;
+}
+
+static int test_monitored_process_reset_cpu_sampling(void)
+{
+    MonitoredProcess process;
+
+    if (
+        monitored_process_init(
+            &process,
+            "sleep",
+            100,
+            200
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to initialize CPU reset test object\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 设置需要被保留的非 CPU 状态。
+     */
+    process.info.pid = 200;
+    process.memory_mib = 32.0;
+
+    process.available = 1;
+    process.previous_available = 1;
+    process.availability_initialized = 1;
+
+    process.memory_level = ALERT_WARNING;
+    process.previous_memory_level = ALERT_NORMAL;
+    process.memory_level_initialized = 1;
+
+    /*
+     * 设置需要被清除的 CPU 状态。
+     */
+    process.cpu_usage = 75.0;
+
+    process.previous_cpu_times.user_ticks = 100;
+    process.previous_cpu_times.system_ticks = 20;
+
+    process.previous_cpu_sample_time.tv_sec = 10;
+    process.previous_cpu_sample_time.tv_nsec = 500;
+
+    process.cpu_sample_initialized = 1;
+    process.cpu_usage_valid = 1;
+
+    process.cpu_level = ALERT_WARNING;
+    process.previous_cpu_level = ALERT_NORMAL;
+    process.cpu_level_initialized = 1;
+
+    monitored_process_reset_cpu_sampling(&process);
+
+    /*
+     * CPU 状态应被清除。
+     */
+    if (
+        process.cpu_usage != 0.0 ||
+        process.previous_cpu_times.user_ticks != 0 ||
+        process.previous_cpu_times.system_ticks != 0 ||
+        process.previous_cpu_sample_time.tv_sec != 0 ||
+        process.previous_cpu_sample_time.tv_nsec != 0 ||
+        process.cpu_sample_initialized != 0 ||
+        process.cpu_usage_valid != 0 ||
+        process.cpu_level != ALERT_NORMAL ||
+        process.previous_cpu_level != ALERT_NORMAL ||
+        process.cpu_level_initialized != 0
+    ) {
+        fprintf(
+            stderr,
+            "CPU sampling state was not reset correctly\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 非 CPU 状态必须保留。
+     */
+    if (
+        strcmp(process.target_name, "sleep") != 0 ||
+        process.configured_pid != 100 ||
+        process.current_pid != 200 ||
+        process.info.pid != 200 ||
+        process.memory_mib != 32.0 ||
+        process.available != 1 ||
+        process.previous_available != 1 ||
+        process.availability_initialized != 1 ||
+        process.memory_level != ALERT_WARNING ||
+        process.previous_memory_level != ALERT_NORMAL ||
+        process.memory_level_initialized != 1
+    ) {
+        fprintf(
+            stderr,
+            "non-CPU state was unexpectedly changed\n"
+        );
+
+        return -1;
+    }
+
+    printf(
+        "monitored process CPU sampling reset test passed\n"
+    );
+
+    return 0;
+}
+
 int main(void)
 {
+
+    /*
+     * 测试 MonitoredProcess 初始化函数。
+     */
+    if (test_monitored_process_init() != 0) {
+        return 1;
+    }
+
+    if (
+        test_monitored_process_reset_runtime_state() != 0
+    ) {
+        return 1;
+    }
+
+    if (
+        test_monitored_process_reset_cpu_sampling() != 0
+    ) {
+        return 1;
+    }
+
     /*
      * 保存当前测试进程的基本信息。
      */

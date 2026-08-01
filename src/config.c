@@ -76,6 +76,14 @@ void config_set_defaults(AppConfig *config)
     config->process_pid = 0;
     config->process_name[0] = '\0';
 
+    memset(
+        config->process_names,
+        0,
+        sizeof(config->process_names)
+    );
+
+    config->process_name_count = 0;
+
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
 
@@ -346,6 +354,97 @@ static int config_set_value(
             value,
             value_length + 1
         );
+    } else if (strcmp(key, "process_names") == 0) {
+        char names_buffer[
+            CONFIG_MAX_PROCESS_NAMES *
+            CONFIG_PROCESS_NAME_LENGTH
+        ];
+
+        char parsed_names
+            [CONFIG_MAX_PROCESS_NAMES]
+            [CONFIG_PROCESS_NAME_LENGTH] = {{0}};
+
+        char *name_token;
+        unsigned int name_count = 0;
+        size_t names_length;
+        size_t name_length;
+
+        /*
+         * 先复制配置字符串，因为 strtok() 会修改字符串内容。
+         */
+        names_length = strlen(value);
+
+        if (names_length >= sizeof(names_buffer)) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        memcpy(
+            names_buffer,
+            value,
+            names_length + 1
+        );
+
+        /*
+         * 使用逗号分割多个进程名称。
+         *
+         * 示例：
+         *     sleep,bash,sshd
+         */
+        name_token = strtok(names_buffer, ",");
+
+        while (name_token != NULL) {
+            if (name_count >= CONFIG_MAX_PROCESS_NAMES) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            name_length = strlen(name_token);
+
+            if (
+                name_length == 0 ||
+                name_length >= CONFIG_PROCESS_NAME_LENGTH
+            ) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            memcpy(
+                parsed_names[name_count],
+                name_token,
+                name_length + 1
+            );
+
+            name_count++;
+
+            name_token = strtok(NULL, ",");
+        }
+
+        /*
+         * process_names 不能为空。
+         */
+        if (name_count == 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        /*
+         * 所有名称解析成功后，再写入正式配置结构体。
+         */
+        memcpy(
+            config->process_names,
+            parsed_names,
+            sizeof(parsed_names)
+        );
+
+        config->process_name_count = name_count;
+
+        /*
+         * 暂时让旧 process_name 保存第一个名称，
+         * 保持现有单进程代码继续正常工作。
+         */
+        memcpy(
+            config->process_name,
+            config->process_names[0],
+            strlen(config->process_names[0]) + 1
+        );
+
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
     ) {
@@ -781,6 +880,8 @@ static int validate_process_memory_threshold_pair(
  */
 int config_validate(const AppConfig *config)
 {
+    unsigned int process_index;
+
     if (config == NULL) {
         fprintf(stderr, "Configuration pointer is NULL\n");
         return -1;
@@ -797,6 +898,68 @@ int config_validate(const AppConfig *config)
         );
 
         return -1;
+    }
+
+    /*
+     * 进程名称数量不能超过数组容量。
+     */
+    if (
+        config->process_name_count >
+        CONFIG_MAX_PROCESS_NAMES
+    ) {
+        fprintf(
+            stderr,
+            "Invalid process_name_count: %u "
+            "exceeds maximum %d\n",
+            config->process_name_count,
+            CONFIG_MAX_PROCESS_NAMES
+        );
+
+        return -1;
+    }
+
+    /*
+     * 检查 process_names 中每一个有效名称。
+     */
+    for (
+        process_index = 0;
+        process_index < config->process_name_count;
+        process_index++
+    ) {
+        /*
+         * 进程名称不能为空。
+         */
+        if (
+            config->process_names[process_index][0] == '\0'
+        ) {
+            fprintf(
+                stderr,
+                "Invalid process_names[%u]: name is empty\n",
+                process_index
+            );
+
+            return -1;
+        }
+
+        /*
+         * 名称必须在字符数组范围内包含字符串结束符。
+         */
+        if (
+            memchr(
+                config->process_names[process_index],
+                '\0',
+                CONFIG_PROCESS_NAME_LENGTH
+            ) == NULL
+        ) {
+            fprintf(
+                stderr,
+                "Invalid process_names[%u]: "
+                "name is not null-terminated\n",
+                process_index
+            );
+
+            return -1;
+        }
     }
 
     if (
@@ -880,6 +1043,8 @@ int config_validate(const AppConfig *config)
  */
 void config_print(const AppConfig *config)
 {
+    unsigned int process_index;
+
     if (config == NULL) {
         return;
     }
@@ -888,10 +1053,20 @@ void config_print(const AppConfig *config)
     printf("monitor_interval          : %u second(s)\n",
            config->monitor_interval);
 
-    if (config->process_name[0] != '\0') {
+    if (config->process_name_count > 0) {
         /*
-         * 配置了 process_name 时，
-         * process_name 的优先级高于 process_pid。
+         * 配置了 process_names 时，
+         * 多进程名称列表的优先级最高。
+         */
+        printf(
+            "process_pid               : %u "
+            "(ignored: process_names has priority)\n",
+            config->process_pid
+        );
+    } else if (config->process_name[0] != '\0') {
+        /*
+         * 没有配置 process_names，
+         * 但配置了旧版 process_name。
          */
         printf(
             "process_pid               : %u "
@@ -900,8 +1075,8 @@ void config_print(const AppConfig *config)
         );
     } else if (config->process_pid == 0) {
         /*
-         * 没有配置 process_name，并且 process_pid 为 0，
-         * 才表示监控 EdgeSentinel 自身。
+         * 两个名称配置都为空，并且 process_pid 为 0，
+         * 表示监控 EdgeSentinel 自身。
          */
         printf(
             "process_pid               : %u (self)\n",
@@ -909,7 +1084,7 @@ void config_print(const AppConfig *config)
         );
     } else {
         /*
-         * 没有配置 process_name，
+         * 两个名称配置都为空，
          * 使用配置文件中的固定 PID。
          */
         printf(
@@ -918,12 +1093,38 @@ void config_print(const AppConfig *config)
         );
     }
 
+    if (config->process_name_count > 0) {
+        printf(
+            "process_name              : %s "
+            "(compatibility field)\n",
+            config->process_name
+        );
+    } else {
+        printf(
+            "process_name              : %s\n",
+            config->process_name[0] != '\0'
+                ? config->process_name
+                : "(not set)"
+        );
+    }
+
     printf(
-        "process_name              : %s\n",
-        config->process_name[0] != '\0'
-            ? config->process_name
-            : "(not set)"
+        "process_name_count        : %u\n",
+        config->process_name_count
     );
+
+    for (
+        process_index = 0;
+        process_index < config->process_name_count;
+        process_index++
+    )
+    {
+        printf(
+            "process_names[%u]         : %s\n",
+            process_index,
+            config->process_names[process_index]
+        );
+    }
 
     printf("cpu_warning_threshold     : %.2f%%\n",
            config->cpu_warning_threshold);

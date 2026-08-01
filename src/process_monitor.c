@@ -10,6 +10,190 @@
 #include <unistd.h>
 
 /*
+ * 初始化一个被监控进程对象。
+ */
+int monitored_process_init(
+    MonitoredProcess *process,
+    const char *target_name,
+    int configured_pid,
+    int current_pid
+)
+{
+    int name_length;
+
+    /*
+     * process 必须指向一个有效的
+     * MonitoredProcess 对象。
+     *
+     * PID 不允许是负数。
+     */
+    if (
+        process == NULL ||
+        configured_pid < 0 ||
+        current_pid < 0
+    ) {
+        return -1;
+    }
+
+    /*
+     * 将整个结构体占用的内存清零。
+     *
+     * 清零后：
+     *
+     * PID 为 0；
+     * double 为 0.0；
+     * 各种 initialized 标志为 0；
+     * 字符数组为空字符串。
+     */
+    memset(process, 0, sizeof(*process));
+
+    /*
+     * 如果提供了进程名称，就把名称复制到结构体中。
+     */
+    if (
+        target_name != NULL &&
+        target_name[0] != '\0'
+    ) {
+        name_length = snprintf(
+            process->target_name,
+            sizeof(process->target_name),
+            "%s",
+            target_name
+        );
+
+        /*
+         * 检查名称复制是否失败或者被截断。
+         */
+        if (
+            name_length < 0 ||
+            (size_t)name_length >=
+                sizeof(process->target_name)
+        ) {
+            memset(process, 0, sizeof(*process));
+            return -1;
+        }
+    }
+
+    /*
+     * 保存配置中的 PID和当前实际 PID。
+     */
+    process->configured_pid = configured_pid;
+    process->current_pid = current_pid;
+
+    /*
+     * 明确设置告警等级初始值。
+     */
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+
+    process->memory_level = ALERT_NORMAL;
+    process->previous_memory_level = ALERT_NORMAL;
+
+    return 0;
+}
+
+/*
+ * 重置目标进程的运行时监控状态。
+ */
+void monitored_process_reset_runtime_state(
+    MonitoredProcess *process
+)
+{
+    /*
+     * 空指针没有可以重置的对象。
+     */
+    if (process == NULL) {
+        return;
+    }
+
+    /*
+     * 清除本次读取到的进程基本信息。
+     */
+    memset(
+        &process->info,
+        0,
+        sizeof(process->info)
+    );
+
+    /*
+     * 清除 CPU 和内存数值。
+     */
+    process->memory_mib = 0.0;
+    process->cpu_usage = 0.0;
+
+    /*
+     * 清除上一次 CPU 累计时间和采样时间。
+     */
+    memset(
+        &process->previous_cpu_times,
+        0,
+        sizeof(process->previous_cpu_times)
+    );
+
+    memset(
+        &process->previous_cpu_sample_time,
+        0,
+        sizeof(process->previous_cpu_sample_time)
+    );
+
+    /*
+     * 清除 CPU 采样状态。
+     */
+    process->cpu_sample_initialized = 0;
+    process->cpu_usage_valid = 0;
+
+    /*
+     * 清除进程可用状态。
+     */
+    process->available = 0;
+    process->previous_available = 0;
+    process->availability_initialized = 0;
+
+    /*
+     * 重置 CPU 告警状态。
+     */
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+    process->cpu_level_initialized = 0;
+
+    /*
+     * 重置内存告警状态。
+     */
+    process->memory_level = ALERT_NORMAL;
+    process->previous_memory_level = ALERT_NORMAL;
+    process->memory_level_initialized = 0;
+}
+
+void monitored_process_reset_cpu_sampling(
+    MonitoredProcess *process
+)
+{
+    if (process == NULL) {
+        return;
+    }
+
+    memset(
+        &process->previous_cpu_times,
+        0,
+        sizeof(process->previous_cpu_times)
+    );
+
+    memset(
+        &process->previous_cpu_sample_time,
+        0,
+        sizeof(process->previous_cpu_sample_time)
+    );
+
+    process->cpu_usage = 0.0;
+    process->cpu_sample_initialized = 0;
+    process->cpu_usage_valid = 0;
+
+    process->cpu_level = ALERT_NORMAL;
+    process->previous_cpu_level = ALERT_NORMAL;
+    process->cpu_level_initialized = 0;
+}
+
+/*
  * 从 /proc/<pid>/status 中读取指定进程的信息。
  *
  * 成功返回 0。

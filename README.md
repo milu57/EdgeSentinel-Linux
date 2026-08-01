@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.5.0**
+**v1.6.0**
 
 ---
 
@@ -36,18 +36,23 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ### 进程监控
 
+* 支持同时监控多个目标进程
+* 支持通过 `process_names` 配置多个进程名称
+* 多个进程名称使用英文逗号分隔
+* 单次最多支持 8 个目标进程
 * 支持监控 EdgeSentinel 自身进程
 * 支持通过 PID 监控指定进程
 * 支持通过进程名称自动查找目标进程
+* 保留 `process_name` 单进程配置兼容性
 * 自动扫描 `/proc`，查找名称匹配的进程
-* `process_name` 非空时优先使用进程名称监控
-* `process_name` 为空时使用 `process_pid`
-* 目标进程尚未启动时持续等待，不影响系统资源监控
+* 每个目标进程独立保存 PID、可用状态和 CPU 采样状态
+* 每个目标进程独立计算 CPU 使用率和常驻内存
+* 目标进程尚未启动时持续等待，不影响其他进程和系统资源监控
 * 目标进程启动后自动获取其 PID 并开始监控
 * 目标进程退出后自动恢复查找状态
 * 目标进程重新启动后自动跟踪新的 PID
-* 支持通过 `SIGHUP` 热更新目标进程名称或 PID
-* 目标进程改变后自动重置进程 CPU 采样状态
+* 支持通过 `SIGHUP` 动态增加、删除或替换目标进程
+* 目标列表改变后自动重置各进程 CPU 采样状态
 * 读取进程名称
 * 读取进程 PID
 * 读取父进程 PID
@@ -97,10 +102,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 服务异常退出后自动重启
 - 自动编译和安装脚本
 - 安全卸载脚本
-- 卸## 进程监控
-
-- 支持监控 EdgeSentinel 自身进程
-- 支持通过 载时保留系统配置和历史日志
+- 卸载时保留系统配置和历史日志
 
 ---
 
@@ -109,10 +111,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 推荐环境：
 
 - Linux
-- GCC 或其## 进程监控
-
-- 支持监控 EdgeSentinel 自身进程
-- 支持通过 他支持 C11 的编译器
+- GCC 或其他支持 C11 的编译器
 - CMake 3.10 或更高版本
 - systemd
 - Bash
@@ -311,10 +310,46 @@ wait "${EDGESENTINEL_PID}"
 
 EdgeSentinel 支持通过 `SIGHUP` 在不中止程序的情况下重新读取配置文件。
 
-先修改当前运行实例所使用的配置文件：
+首先启动程序：
+
+```bash
+./build/edgesentinel -c config/edgesentinel.conf
+```
+
+保持程序运行，然后在另一个终端修改当前实例使用的配置文件：
 
 ```bash
 nano config/edgesentinel.conf
+```
+
+保存配置后，取得 EdgeSentinel 的 PID：
+
+```bash
+pgrep -x edgesentinel
+```
+
+也可以直接保存 PID 并发送 `SIGHUP`：
+
+```bash
+EDGESENTINEL_PID="$(pgrep -x edgesentinel)"
+kill -HUP "${EDGESENTINEL_PID}"
+```
+
+配置重新加载成功后，运行终端会输出：
+
+```text
+Configuration reloaded successfully.
+```
+
+`process_names` 中的目标可以在运行期间增加、删除或替换，目标数量也可以发生变化。目标列表重新加载后，每个目标的 CPU 采样状态都会重新初始化，因此第一轮显示：
+
+```text
+CPU: [COLLECTING]
+```
+
+下一轮采样才会显示 CPU 使用率。
+
+如果新配置加载或校验失败，EdgeSentinel 会继续使用当前已经生效的旧配置。
 
 ---
 
@@ -334,14 +369,18 @@ config/edgesentinel.conf
 # 监控采样间隔，单位：秒
 monitor_interval=3
 
-# 要监控的进程名称
-# 非空时优先通过进程名称查找目标进程
-# 找不到目标进程时会持续等待
-# 目标进程重启后会自动跟踪新的 PID
+# 要同时监控的多个进程名称
+# 使用英文逗号分隔，最多支持 8 个名称
+# 名称之间不要添加空格
+# 非空时优先于 process_name 和 process_pid
+process_names=sleep,bash,tail
+
+# 兼容旧版本的单进程名称配置
+# 仅当 process_names 为空时生效
 process_name=
 
 # 要监控的进程 PID
-# process_name 为空时，本配置项才会生效
+# 仅当 process_names 和 process_name 都为空时生效
 # 0 表示监控 EdgeSentinel 自身
 # 大于 0 表示监控指定 PID
 process_pid=0
@@ -381,19 +420,30 @@ log_max_size=1048576
 
 ## 进程监控目标选择规则
 
-EdgeSentinel 按照以下顺序确定需要监控的目标进程：
+EdgeSentinel 按照以下优先级确定需要监控的目标进程：
 
-1. 当 `process_name` 非空时，程序扫描 `/proc`，查找名称匹配的进程；
-2. 当 `process_name` 为空且 `process_pid` 大于 `0` 时，程序监控指定 PID；
-3. 当 `process_name` 为空且 `process_pid` 等于 `0` 时，程序监控 EdgeSentinel 自身。
+1. 当 `process_names` 中配置了一个或多个名称时，程序同时监控这些名称对应的进程；
+2. 当 `process_names` 为空且 `process_name` 非空时，程序按照单进程名称模式监控目标进程；
+3. 当 `process_names` 和 `process_name` 都为空，且 `process_pid` 大于 `0` 时，程序监控指定 PID；
+4. 当 `process_names` 和 `process_name` 都为空，且 `process_pid` 等于 `0` 时，程序监控 EdgeSentinel 自身。
 
-按进程名称监控时，目标进程的 PID 可以发生变化。
-如果目标进程尚未启动，EdgeSentinel 会保持等待状态，同时继续执行系统 CPU、内存、磁盘、负载和网络监控。
-目标进程启动后，程序会自动获取其 PID 并开始采集进程信息。目标进程退出后，程序会重新进入查找状态；当目标进程再次启动时，程序会自动跟踪新的 PID，无需修改配置或重新启动 EdgeSentinel。
+多进程名称配置示例：
+
+```ini
+process_names=sleep,bash,tail
+```
+
+多个名称之间使用英文逗号分隔，名称之间不要添加空格，最多支持 8 个目标进程。
+
+程序会为每个目标进程分别保存 PID、可用状态、CPU 采样状态以及 CPU 和内存告警等级。
+
+按进程名称监控时，目标进程的 PID 可以发生变化。如果某个目标进程尚未启动，该目标会保持等待状态，但不会影响其他进程和系统资源监控。目标进程启动后，程序会自动获取其 PID；目标退出后会重新进入查找状态，并在目标重新启动后自动跟踪新的 PID。
 
 
 - `monitor_interval`：监控采样间隔，单位为秒；
-- `process_pid`：目标进程 PID；
+- `process_names`：多个目标进程名称，使用英文逗号分隔，最多支持 8 个；
+- `process_name`：兼容旧版本的单个目标进程名称；
+- `process_pid`：单个目标进程 PID；
 - `cpu_warning_threshold`：系统 CPU WARNING 阈值；
 - `cpu_critical_threshold`：系统 CPU CRITICAL 阈值；
 - `process_cpu_warning_threshold`：目标进程 CPU WARNING 阈值；
@@ -423,18 +473,71 @@ EdgeSentinel 按照以下顺序确定需要监控的目标进程：
 
 ```text
 0 <= WARNING < CRITICAL
+```
 
 ---
 
 ## 进程监控
 
-EdgeSentinel 可以监控自身进程，也可以监控指定 PID 对应的进程。
+EdgeSentinel 支持同时监控多个进程，也兼容单进程名称、指定 PID 和监控自身的配置方式。
+
+### 同时监控多个进程
+
+例如同时监控 `sleep`、`bash` 和 `tail`：
+
+```ini
+process_names=sleep,bash,tail
+```
+
+启动程序：
+
+```bash
+./build/edgesentinel -c config/edgesentinel.conf
+```
+
+程序会为每个目标建立独立的监控状态：
+
+```text
+Monitoring process[0]: sleep (PID: 12048)
+Monitoring process[1]: bash (PID: 1992)
+Monitoring process[2]: tail (PID: 12049)
+```
+
+每轮采样分别输出各目标的信息：
+
+```text
+Process[0]: sleep PID=12048 PPID=1992
+  State: S (sleeping)
+  Memory: 1.96 MiB [NORMAL]
+  CPU: 0.00% [NORMAL]
+
+Process[1]: bash PID=1992 PPID=1966
+  State: S (sleeping)
+  Memory: 7.25 MiB [NORMAL]
+  CPU: 0.00% [NORMAL]
+```
+
+每个目标进程独立保存 PID、CPU 采样状态、可用状态和告警等级。某个目标退出或尚未启动时，不会影响其他目标和系统资源监控。
+
+### 兼容单进程名称配置
+
+旧版本的单进程名称配置仍然可用：
+
+```ini
+process_names=
+process_name=sleep
+```
+
+只有当 `process_names` 为空时，`process_name` 才会生效。
+
 
 ### 监控自身
 
 配置：
 
 ```ini
+process_names=
+process_name=
 process_pid=0
 ```
 
@@ -443,6 +546,8 @@ process_pid=0
 程序检测到：
 
 ```text
+process_names=
+process_name=
 process_pid=0
 ```
 
@@ -461,6 +566,8 @@ getpid()
 例如监控 PID 为 `1234` 的进程：
 
 ```ini
+process_names=
+process_name=
 process_pid=1234
 ```
 
@@ -802,6 +909,8 @@ kill 13204
 然后将配置恢复为：
 
 ```ini
+process_names=
+process_name=
 process_pid=0
 ```
 
@@ -1231,6 +1340,26 @@ tail -n 30 logs/edgesentinel.log
 
 ## 版本说明
 
+### v1.6.0
+
+- 新增同时监控多个目标进程的功能；
+- 新增 `process_names` 多进程名称配置项；
+- 多个进程名称使用英文逗号分隔；
+- 单次最多支持 8 个目标进程；
+- 新增 `MonitoredProcess` 结构体，统一保存单个目标进程的运行状态；
+- 每个目标进程独立保存 PID、可用状态和 CPU 采样状态；
+- 每个目标进程独立计算 CPU 使用率和常驻内存；
+- 每个目标进程独立进行 CPU 和内存告警分级；
+- 某个目标退出或不可用时，不影响其他目标和系统资源监控；
+- 支持等待尚未启动的多个目标进程；
+- 支持目标进程重新启动后自动跟踪新的 PID；
+- 支持通过 `SIGHUP` 动态增加、删除和替换目标进程；
+- 支持通过 `SIGHUP` 改变目标进程数量；
+- 热加载后自动重新初始化各目标进程的 CPU 采样状态；
+- 新增多进程配置数量和名称合法性检查；
+- 保留 `process_name`、`process_pid` 和监控自身的兼容功能。
+
+
 ### v1.5.0
 
 * 新增按进程名称监控目标进程的功能；
@@ -1359,7 +1488,6 @@ tail -n 30 logs/edgesentinel.log
 ---
 
 ## 后续计划
-* 支持同时监控多个目标进程；
 * 增加自动化单元测试；
 * 增加网络接口过滤配置；
 * 增加更多通知和告警方式；
