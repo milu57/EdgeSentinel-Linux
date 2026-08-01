@@ -136,3 +136,26 @@ add_test(
     NAME system_resources_test
     COMMAND test_system_resources
 )
+
+
+# Build CPU and network calculation tests.
+add_executable(test_calculations
+    tests/test_calculations.c
+    src/cpu_monitor.c
+    src/network.c
+)
+
+target_include_directories(test_calculations PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_calculations PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME calculations_test
+    COMMAND test_calculations
+)
