@@ -159,3 +159,33 @@ add_test(
     NAME calculations_test
     COMMAND test_calculations
 )
+
+
+# Run the complete EdgeSentinel startup and shutdown test.
+add_test(
+    NAME startup_integration_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_startup.sh"
+        "$<TARGET_FILE:edgesentinel>"
+)
+
+set_tests_properties(
+    startup_integration_test
+    PROPERTIES
+        TIMEOUT 10
+)
+
+
+# Verify fallback to defaults when configuration parsing fails.
+add_test(
+    NAME invalid_config_startup_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_invalid_config_startup.sh"
+        "$<TARGET_FILE:edgesentinel>"
+)
+
+set_tests_properties(
+    invalid_config_startup_test
+    PROPERTIES
+        TIMEOUT 10
+)
