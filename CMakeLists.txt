@@ -47,3 +47,24 @@ add_test(
     NAME process_monitor_test
     COMMAND test_process_monitor
 )
+
+# Build the configuration test program.
+add_executable(test_config
+    tests/test_config.c
+    src/config.c
+)
+
+target_include_directories(test_config PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_config PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME config_test
+    COMMAND test_config
+)

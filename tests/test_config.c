@@ -1,0 +1,878 @@
+#include <stdio.h>
+#include <string.h>
+
+#include "config.h"
+
+/*
+ * 测试 config_set_defaults()。
+ *
+ * 目标：
+ *     确认 AppConfig 中的所有主要成员
+ *     都被设置成预期的默认值。
+ *
+ * 返回值：
+ *     测试通过返回 0；
+ *     测试失败返回 -1。
+ */
+static int test_config_defaults(void)
+{
+    AppConfig config;
+    unsigned int process_index;
+
+    /*
+     * 调用被测试函数，
+     * 为 config 设置默认配置。
+     */
+    config_set_defaults(&config);
+
+    if (config.monitor_interval != 1) {
+        fprintf(
+            stderr,
+            "unexpected monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_pid != 0) {
+        fprintf(
+            stderr,
+            "unexpected process_pid: %u\n",
+            config.process_pid
+        );
+
+        return -1;
+    }
+
+    if (config.process_name[0] != '\0') {
+        fprintf(
+            stderr,
+            "process_name should be empty: %s\n",
+/*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 0) {
+        fprintf(
+            stderr,
+            "unexpected process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    /*
+     * 默认情况下，
+     * process_names 数组中的每个名称都应该为空。
+     */
+    for (
+        process_index = 0;
+        process_index < CONFIG_MAX_PROCESS_NAMES;
+        process_index++
+    ) {
+        if (
+            config.process_names[process_index][0] != '\0'
+        ) {
+            fprintf(
+                stderr,
+                "process_names[%u] should be empty\n",
+                process_index
+            );
+
+            return -1;
+        }
+    }
+
+    if (config.cpu_warning_threshold != 70.0) {
+        fprintf(
+            stderr,
+            "unexpected CPU warning threshold: %.2f\n",
+            config.cpu_warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (config.cpu_critical_threshold != 90.0) {
+        fprintf(
+            stderr,
+            "unexpected CPU critical threshold: %.2f\n",
+            config.cpu_critical_threshold
+        );
+
+        return -1;
+    }
+
+    if (
+        config.process_cpu_warning_threshold != 70.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process CPU warning threshold: %.2f\n",
+            config.process_cpu_warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (
+        config.process_cpu_critical_threshold != 90.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process CPU critical threshold: %.2f\n",
+            config.process_cpu_critical_threshold
+        );
+
+        return -1;
+    }
+/*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+    if (
+        config.process_memory_warning_threshold_mib != 100.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process memory warning threshold: %.2f\n",
+            config.process_memory_warning_threshold_mib
+        );
+
+        return -1;
+    }
+
+    if (
+        config.process_memory_critical_threshold_mib != 200.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process memory critical threshold: %.2f\n",
+            config.process_memory_critical_threshold_mib
+        );
+/*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+        return -1;
+    }
+
+    if (config.memory_warning_threshold != 75.0) {
+        fprintf(
+            stderr,
+            "unexpected memory warning threshold: %.2f\n",
+            config.memory_warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (config.memory_critical_threshold != 90.0) {
+        fprintf(
+            stderr,
+            "unexpected memory critical threshold: %.2f\n",
+            config.memory_critical_threshold
+        );
+
+        return -1;
+    }
+
+    if (config.disk_warning_threshold != 80.0) {
+        fprintf(
+            stderr,
+            "unexpected disk warning threshold: %.2f\n",
+            config.disk_warning_threshold
+        );
+
+        return -1;
+    }
+
+    if (config.disk_critical_threshold != 90.0) {
+        fprintf(
+            stderr,
+            "unexpected disk critical threshold: %.2f\n",
+            config.disk_critical_threshold
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.log_file,
+            "logs/edgesentinel.log"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected log file: %s\n",
+            config.log_file
+        );
+
+        return -1;
+    }
+
+    if (config.log_max_size != 1048576UL) {
+        fprintf(
+            stderr,
+            "unexpected log_max_size: %lu\n",
+            config.log_max_size
+        );
+
+        return -1;
+    }
+
+    printf("configuration defaults test passed\n");
+
+    return 0;
+}
+
+/*
+ * 测试从配置文件读取多个进程名称。
+ *
+ * 配置内容：
+ *     process_names=sleep,bash,tail
+ *
+ * 预期结果：
+ *     process_name_count 等于 3；
+ *     三个数组元素分别为 sleep、bash 和 tail；
+ *     兼容字段 process_name 保存第一个名称 sleep。
+ */
+static int test_multiple_process_names(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_config.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    /*
+     * 创建临时配置文件。
+     */
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "monitor_interval=3\n"
+            "process_names=sleep,bash,tail\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write temporary configuration file\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    /*
+     * config_load() 会在调用者当前配置的基础上
+     * 加载配置文件，所以要先设置默认值。
+     */
+ /*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+   config_set_defaults(&config);
+
+    if (config_load(test_filename, &config) != 0) {
+        fprintf(
+            stderr,
+            "config_load failed for valid configuration\n"
+        );
+
+        remove(test_filename);
+
+        return -1;
+    }
+
+    /*
+     * 配置文件已经读取完毕，
+     * 临时文件不再需要。
+     */
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    if (config.monitor_interval != 3) {
+        fprintf(
+            stderr,
+            "unexpected monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 3) {
+        fprintf(
+            stderr,
+            "unexpected process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_names[0],
+            "sleep"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process_names[0]: %s\n",
+            config.process_names[0]
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_names[1],
+            "bash"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process_names[1]: %s\n",
+            config.process_names[1]
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_names[2],
+            "tail"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process_names[2]: %s\n",
+            config.process_names[2]
+        );
+
+        return -1;
+    }
+
+    /*
+     * v1.6 当前为了兼容旧单进程代码，
+     * 会把第一个多进程名称同时保存到 process_name。
+     */
+    if (
+        strcmp(
+            config.process_name,
+            "sleep"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected compatibility process_name: %s\n",
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    printf("multiple process names test passed\n");
+
+    return 0;
+}
+
+/*
+ * 测试 process_names 的最大合法数量。
+ *
+ * CONFIG_MAX_PROCESS_NAMES 当前等于 8，
+ * 因此配置 8 个进程名称应该加载成功。
+ */
+static int test_maximum_process_names(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_max_names.conf";
+
+    const char *expected_names[CONFIG_MAX_PROCESS_NAMES] = {
+        "process1",
+        "process2",
+        "process3",
+        "process4",
+        "process5",
+        "process6",
+        "process7",
+        "process8"
+    };
+
+    FILE *file;
+    AppConfig config;
+    unsigned int process_index;
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "process_names="
+            "process1,process2,process3,process4,"
+            "process5,process6,process7,process8\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write maximum process names configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    config_set_defaults(&config);
+
+    if (config_load(test_filename, &config) != 0) {
+        fprintf(
+            stderr,
+            "config_load rejected maximum valid process names\n"
+        );
+
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    if (
+        config.process_name_count !=
+        CONFIG_MAX_PROCESS_NAMES
+    ) {
+        fprintf(
+            stderr,
+            "unexpected maximum process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    /*
+     * 逐个检查 8 个名称是否按照原顺序
+     * 保存到了 process_names 数组中。
+     */
+    for (
+        process_index = 0;
+        process_index < CONFIG_MAX_PROCESS_NAMES;
+        process_index++
+    ) {
+        if (
+            strcmp(
+                config.process_names[process_index],
+                expected_names[process_index]
+            ) != 0
+        ) {
+            fprintf(
+                stderr,
+                "unexpected process_names[%u]: %s\n",
+                process_index,
+                config.process_names[process_index]
+            );
+
+            return -1;
+        }
+    }
+
+    printf("maximum process names test passed\n");
+
+    return 0;
+}
+
+/*
+ * 测试超过 process_names 最大数量时，
+ * config_load() 是否拒绝配置。
+ *
+ * CONFIG_MAX_PROCESS_NAMES 当前等于 8，
+ * 因此配置 9 个名称必须失败。
+ *
+ * 同时验证：
+ * 配置文件前面已经解析成功的内容，
+ * 也不能部分覆盖调用者原来的配置。
+ */
+static int test_too_many_process_names(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_too_many_names.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    /*
+     * 先准备一份调用者当前正在使用的配置。
+     * 后面加载非法配置失败时，
+     * 这些值必须保持不变。
+     */
+    config_set_defaults(&config);
+
+    config.monitor_interval = 7;
+    config.process_pid = 1234;
+
+    snprintf(
+        config.process_name,
+        sizeof(config.process_name),
+        "%s",
+        "original"
+    );
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    /*
+     * 前两项本身合法，
+     * 但 process_names 中包含 9 个名称。
+     */
+    if (
+        fprintf(
+            file,
+            "monitor_interval=20\n"
+            "process_pid=9999\n"
+            "process_names="
+            "process1,process2,process3,process4,"
+            "process5,process6,process7,process8,"
+            "process9\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write too many process names configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    /*
+     * 9 个名称超过最大容量，
+     * 因此 config_load() 必须返回失败。
+     */
+    if (config_load(test_filename, &config) == 0) {
+        fprintf(
+            stderr,
+            "config_load accepted too many process names\n"
+        );
+
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    /*
+     * 虽然非法配置文件中的 monitor_interval
+     * 和 process_pid 已经先被解析，
+     * 但整个配置加载失败后不能应用任何修改。
+     */
+    if (config.monitor_interval != 7) {
+        fprintf(
+            stderr,
+            "failed configuration changed monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_pid != 1234) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_pid: %u\n",
+            config.process_pid
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_name,
+            "original"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name: %s\n",
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 0) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    printf("too many process names rejection test passed\n");
+
+    return 0;
+}
+
+/*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+
+/*
+ * 测试 process_names 中包含空名称时，
+ * config_load() 是否拒绝配置。
+ *
+ * sleep,,bash 中两个逗号之间没有内容，
+ * 因此中间存在一个非法的空进程名称。
+ */
+static int test_empty_process_name_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_empty_name.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    config.monitor_interval = 9;
+    config.process_pid = 4321;
+
+    snprintf(
+        config.process_name,
+        sizeof(config.process_name),
+        "%s",
+        "original"
+    );
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "monitor_interval=20\n"
+            "process_names=sleep,,bash\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write empty process name configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (config_load(test_filename, &config) == 0) {
+        fprintf(
+            stderr,
+            "config_load accepted an empty process name\n"
+        );
+
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    if (config.monitor_interval != 9) {
+        fprintf(
+            stderr,
+            "failed configuration changed monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_pid != 4321) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_pid: %u\n",
+            config.process_pid
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.process_name,
+            "original"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name: %s\n",
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 0) {
+        fprintf(
+            stderr,
+            "failed configuration changed process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    printf("empty process name rejection test passed\n");
+
+    return 0;
+}
+
+int main(void)
+{
+    if (test_config_defaults() != 0) {
+        fprintf(
+            stderr,
+            "configuration defaults test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_multiple_process_names() != 0) {
+        fprintf(
+            stderr,
+            "multiple process names test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_maximum_process_names() != 0) {
+        fprintf(
+            stderr,
+            "maximum process names test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_too_many_process_names() != 0) {
+        fprintf(
+            stderr,
+            "too many process names rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_empty_process_name_rejected() != 0) {
+        fprintf(
+            stderr,
+            "empty process name rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    printf("all configuration tests passed\n");
+
+    return 0;
+}

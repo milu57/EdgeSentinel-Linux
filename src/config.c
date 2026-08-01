@@ -374,6 +374,31 @@ static int config_set_value(
          */
         names_length = strlen(value);
 
+        /*
+         * process_names 不能为空。
+         */
+        if (names_length == 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        /*
+         * strtok() 会跳过连续的分隔符，
+         * 因此必须在调用 strtok() 前主动检查空名称。
+         *
+         * 以下情况都包含空进程名称：
+         *
+         *     ,sleep
+         *     sleep,
+         *     sleep,,bash
+         */
+        if (
+            value[0] == ',' ||
+            value[names_length - 1] == ',' ||
+            strstr(value, ",,") != NULL
+        ) {
+            return CONFIG_VALUE_INVALID;
+        }
+
         if (names_length >= sizeof(names_buffer)) {
             return CONFIG_VALUE_INVALID;
         }
