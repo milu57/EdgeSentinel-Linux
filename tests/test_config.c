@@ -1250,6 +1250,412 @@ static int test_process_name_null_termination_validation(void)
 }
 
 
+
+/*
+ * 测试 monitor_interval 等于 0 时，
+ * config_validate() 是否拒绝配置。
+ */
+static int test_zero_monitor_interval_validation(void)
+{
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    config.monitor_interval = 0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted zero monitor_interval\n"
+        );
+
+        return -1;
+    }
+
+    printf("zero monitor interval validation test passed\n");
+
+    return 0;
+}
+
+
+
+/*
+ * 测试不同类型告警阈值的合法性检查。
+ */
+static int test_alert_threshold_validation(void)
+{
+    AppConfig config;
+
+    /*
+     * 系统 CPU 的 WARNING 必须小于 CRITICAL。
+     */
+    config_set_defaults(&config);
+    config.cpu_warning_threshold = 90.0;
+    config.cpu_critical_threshold = 80.0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted invalid CPU thresholds\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 系统内存百分比不能小于 0。
+     */
+    config_set_defaults(&config);
+    config.memory_warning_threshold = -1.0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted negative memory threshold\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 磁盘使用率属于百分比，
+     * 因此不能超过 100。
+     */
+    config_set_defaults(&config);
+    config.disk_critical_threshold = 101.0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted disk threshold above 100\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 进程 CPU 可以超过 100%，
+     * 但 WARNING 仍然必须小于 CRITICAL。
+     */
+    config_set_defaults(&config);
+    config.process_cpu_warning_threshold = 200.0;
+    config.process_cpu_critical_threshold = 150.0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted invalid process CPU thresholds\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 进程内存使用 MiB，不受 100 的限制，
+     * 但 WARNING 仍然必须小于 CRITICAL。
+     */
+    config_set_defaults(&config);
+    config.process_memory_warning_threshold_mib = 300.0;
+    config.process_memory_critical_threshold_mib = 200.0;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted invalid process memory thresholds\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 验证进程 CPU 阈值确实允许超过 100%。
+     *
+     * 多线程进程可能同时占用多个 CPU 核心，
+     * 所以 150% 和 200% 是合法配置。
+     */
+    config_set_defaults(&config);
+    config.process_cpu_warning_threshold = 150.0;
+    config.process_cpu_critical_threshold = 200.0;
+
+    if (config_validate(&config) != 0) {
+        fprintf(
+            stderr,
+            "config_validate rejected valid process CPU thresholds "
+            "above 100\n"
+        );
+
+        return -1;
+    }
+
+    printf("alert threshold validation test passed\n");
+
+    return 0;
+}
+
+
+
+/*
+ * 测试配置文件中的非法数字格式是否会被拒绝。
+ */
+static int test_invalid_numeric_formats_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_invalid_number.conf";
+
+    const char *invalid_lines[] = {
+        "monitor_interval=-1",
+        "monitor_interval=3abc",
+        "cpu_warning_threshold=nan",
+        "log_max_size=-100"
+    };
+
+    const unsigned int invalid_line_count =
+        sizeof(invalid_lines) /
+        sizeof(invalid_lines[0]);
+
+    FILE *file;
+    AppConfig config;
+    unsigned int case_index;
+    int load_result;
+
+    for (
+        case_index = 0;
+        case_index < invalid_line_count;
+        case_index++
+    ) {
+        /*
+         * 每个测试用例开始前都恢复一份确定的原配置。
+         */
+        config_set_defaults(&config);
+
+        config.monitor_interval = 17;
+        config.process_pid = 2468;
+        config.cpu_warning_threshold = 60.0;
+        config.log_max_size = 7777UL;
+
+        file = fopen(test_filename, "w");
+
+        if (file == NULL) {
+            perror("fopen");
+            return -1;
+        }
+
+        if (
+            fprintf(
+                file,
+                "%s\n",
+                invalid_lines[case_index]
+            ) < 0
+        ) {
+            fprintf(
+                stderr,
+                "failed to write invalid numeric configuration\n"
+            );
+
+            fclose(file);
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (fclose(file) != 0) {
+            perror("fclose");
+            remove(test_filename);
+
+            return -1;
+        }
+
+        load_result = config_load(test_filename, &config);
+
+        if (remove(test_filename) != 0) {
+            perror("remove");
+            return -1;
+        }
+
+        if (load_result == 0) {
+            fprintf(
+                stderr,
+                "config_load accepted invalid numeric value: %s\n",
+                invalid_lines[case_index]
+            );
+
+            return -1;
+        }
+
+        /*
+         * 加载失败后，原有配置不能被部分覆盖。
+         */
+        if (config.monitor_interval != 17) {
+            fprintf(
+                stderr,
+                "invalid numeric configuration changed "
+                "monitor_interval: %u\n",
+                config.monitor_interval
+            );
+
+            return -1;
+        }
+
+        if (config.process_pid != 2468) {
+            fprintf(
+                stderr,
+                "invalid numeric configuration changed "
+                "process_pid: %u\n",
+                config.process_pid
+            );
+
+            return -1;
+        }
+
+        if (config.cpu_warning_threshold != 60.0) {
+            fprintf(
+                stderr,
+                "invalid numeric configuration changed "
+                "CPU warning threshold: %.2f\n",
+                config.cpu_warning_threshold
+            );
+
+            return -1;
+        }
+
+        if (config.log_max_size != 7777UL) {
+            fprintf(
+                stderr,
+                "invalid numeric configuration changed "
+                "log_max_size: %lu\n",
+                config.log_max_size
+            );
+
+            return -1;
+        }
+    }
+
+    printf("invalid numeric formats rejection test passed\n");
+
+    return 0;
+}
+
+
+
+/*
+ * 测试未知配置项和缺少等号的配置行
+ * 是否会被 config_load() 拒绝。
+ */
+static int test_invalid_config_lines_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_invalid_lines.conf";
+
+    const char *invalid_lines[] = {
+        "unknown_option=123",
+        "monitor_interval 3"
+    };
+
+    const unsigned int invalid_line_count =
+        sizeof(invalid_lines) /
+        sizeof(invalid_lines[0]);
+
+    FILE *file;
+    AppConfig config;
+    unsigned int case_index;
+    int load_result;
+
+    for (
+        case_index = 0;
+        case_index < invalid_line_count;
+        case_index++
+    ) {
+        config_set_defaults(&config);
+
+        /*
+         * 设置一份原有配置，用来验证加载失败后
+         * 配置结构体不会被部分修改。
+         */
+        config.monitor_interval = 19;
+        config.process_pid = 1357;
+
+        file = fopen(test_filename, "w");
+
+        if (file == NULL) {
+            perror("fopen");
+            return -1;
+        }
+
+        if (
+            fprintf(
+                file,
+                "monitor_interval=30\n"
+                "%s\n",
+                invalid_lines[case_index]
+            ) < 0
+        ) {
+            fprintf(
+                stderr,
+                "failed to write invalid configuration line\n"
+            );
+
+            fclose(file);
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (fclose(file) != 0) {
+            perror("fclose");
+            remove(test_filename);
+
+            return -1;
+        }
+
+        load_result = config_load(test_filename, &config);
+
+        if (remove(test_filename) != 0) {
+            perror("remove");
+            return -1;
+        }
+
+        if (load_result == 0) {
+            fprintf(
+                stderr,
+                "config_load accepted invalid line: %s\n",
+                invalid_lines[case_index]
+            );
+
+            return -1;
+        }
+
+        /*
+         * 第一行 monitor_interval=30 虽然已经成功解析，
+         * 但后续行出现错误后，整个配置不能生效。
+         */
+        if (config.monitor_interval != 19) {
+            fprintf(
+                stderr,
+                "invalid configuration changed "
+                "monitor_interval: %u\n",
+                config.monitor_interval
+            );
+
+            return -1;
+        }
+
+        if (config.process_pid != 1357) {
+            fprintf(
+                stderr,
+                "invalid configuration changed process_pid: %u\n",
+                config.process_pid
+            );
+
+            return -1;
+        }
+    }
+
+    printf("invalid configuration lines rejection test passed\n");
+
+    return 0;
+}
+
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -1339,6 +1745,42 @@ int main(void)
         fprintf(
             stderr,
             "process name null termination validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_zero_monitor_interval_validation() != 0) {
+        fprintf(
+            stderr,
+            "zero monitor interval validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_alert_threshold_validation() != 0) {
+        fprintf(
+            stderr,
+            "alert threshold validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_invalid_numeric_formats_rejected() != 0) {
+        fprintf(
+            stderr,
+            "invalid numeric formats rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_invalid_config_lines_rejected() != 0) {
+        fprintf(
+            stderr,
+            "invalid configuration lines rejection test failed\n"
         );
 
         return 1;
