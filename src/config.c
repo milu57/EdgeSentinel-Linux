@@ -1053,10 +1053,20 @@ void config_print(const AppConfig *config)
     printf("monitor_interval          : %u second(s)\n",
            config->monitor_interval);
 
-    if (config->process_name[0] != '\0') {
+    if (config->process_name_count > 0) {
         /*
-         * 配置了 process_name 时，
-         * process_name 的优先级高于 process_pid。
+         * 配置了 process_names 时，
+         * 多进程名称列表的优先级最高。
+         */
+        printf(
+            "process_pid               : %u "
+            "(ignored: process_names has priority)\n",
+            config->process_pid
+        );
+    } else if (config->process_name[0] != '\0') {
+        /*
+         * 没有配置 process_names，
+         * 但配置了旧版 process_name。
          */
         printf(
             "process_pid               : %u "
@@ -1065,8 +1075,8 @@ void config_print(const AppConfig *config)
         );
     } else if (config->process_pid == 0) {
         /*
-         * 没有配置 process_name，并且 process_pid 为 0，
-         * 才表示监控 EdgeSentinel 自身。
+         * 两个名称配置都为空，并且 process_pid 为 0，
+         * 表示监控 EdgeSentinel 自身。
          */
         printf(
             "process_pid               : %u (self)\n",
@@ -1074,7 +1084,7 @@ void config_print(const AppConfig *config)
         );
     } else {
         /*
-         * 没有配置 process_name，
+         * 两个名称配置都为空，
          * 使用配置文件中的固定 PID。
          */
         printf(
@@ -1083,12 +1093,20 @@ void config_print(const AppConfig *config)
         );
     }
 
-    printf(
-        "process_name              : %s\n",
-        config->process_name[0] != '\0'
-            ? config->process_name
-            : "(not set)"
-    );
+    if (config->process_name_count > 0) {
+        printf(
+            "process_name              : %s "
+            "(compatibility field)\n",
+            config->process_name
+        );
+    } else {
+        printf(
+            "process_name              : %s\n",
+            config->process_name[0] != '\0'
+                ? config->process_name
+                : "(not set)"
+        );
+    }
 
     printf(
         "process_name_count        : %u\n",
