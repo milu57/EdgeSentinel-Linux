@@ -220,6 +220,13 @@ static int test_config_defaults(void)
             "logs/edgesentinel.log"
         ) != 0
     ) {
+/*
+ * 测试 process_names 以逗号开头或结尾时，
+ * config_load() 是否拒绝配置。
+ *
+ * ,sleep 表示第一个名称为空；
+ * sleep, 表示最后一个名称为空。
+ */
         fprintf(
             stderr,
             "unexpected log file: %s\n",
@@ -825,6 +832,164 @@ static int test_empty_process_name_rejected(void)
     return 0;
 }
 
+/*
+ * 测试 process_names 以逗号开头或结尾时，
+ * config_load() 是否拒绝配置。
+ *
+ * ,sleep 表示第一个名称为空；
+ * sleep, 表示最后一个名称为空。
+ */
+
+
+
+
+static int test_edge_empty_process_names_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_edge_empty_name.conf";
+
+    const char *invalid_values[] = {
+        ",sleep",
+        "sleep,"
+    };
+
+    const unsigned int invalid_value_count =
+        sizeof(invalid_values) /
+        sizeof(invalid_values[0]);
+
+    FILE *file;
+    AppConfig config;
+    unsigned int case_index;
+
+    for (
+        case_index = 0;
+        case_index < invalid_value_count;
+        case_index++
+    ) {
+        config_set_defaults(&config);
+
+        /*
+         * 保存一份原有配置，
+         * 确认加载失败后不会被部分覆盖。
+         */
+        config.monitor_interval = 11;
+        config.process_pid = 5678;
+
+        snprintf(
+            config.process_name,
+            sizeof(config.process_name),
+            "%s",
+            "original"
+        );
+
+        file = fopen(test_filename, "w");
+
+        if (file == NULL) {
+            perror("fopen");
+            return -1;
+        }
+
+        if (
+            fprintf(
+                file,
+                "monitor_interval=30\n"
+                "process_names=%s\n",
+                invalid_values[case_index]
+            ) < 0
+        ) {
+            fprintf(
+                stderr,
+                "failed to write edge empty name configuration\n"
+            );
+
+            fclose(file);
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (fclose(file) != 0) {
+            perror("fclose");
+            remove(test_filename);
+
+            return -1;
+        }
+
+        /*
+         * 以逗号开头或结尾都代表存在空名称，
+         * config_load() 必须返回失败。
+         */
+        if (config_load(test_filename, &config) == 0) {
+            fprintf(
+                stderr,
+                "config_load accepted invalid process_names: %s\n",
+                invalid_values[case_index]
+            );
+
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (remove(test_filename) != 0) {
+            perror("remove");
+            return -1;
+        }
+
+        /*
+         * 非法配置不能覆盖原有配置。
+         */
+        if (config.monitor_interval != 11) {
+            fprintf(
+                stderr,
+                "failed configuration changed monitor_interval: %u\n",
+                config.monitor_interval
+            );
+
+            return -1;
+        }
+
+        if (config.process_pid != 5678) {
+            fprintf(
+                stderr,
+                "failed configuration changed process_pid: %u\n",
+                config.process_pid
+            );
+
+            return -1;
+        }
+
+        if (
+            strcmp(
+                config.process_name,
+                "original"
+            ) != 0
+        ) {
+            fprintf(
+                stderr,
+                "failed configuration changed process_name: %s\n",
+                config.process_name
+            );
+
+            return -1;
+        }
+
+        if (config.process_name_count != 0) {
+            fprintf(
+                stderr,
+                "failed configuration changed process_name_count: %u\n",
+                config.process_name_count
+            );
+
+            return -1;
+        }
+    }
+
+    printf("edge empty process names rejection test passed\n");
+
+    return 0;
+}
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -867,6 +1032,15 @@ int main(void)
         fprintf(
             stderr,
             "empty process name rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_edge_empty_process_names_rejected() != 0) {
+        fprintf(
+            stderr,
+            "edge empty process names rejection test failed\n"
         );
 
         return 1;
