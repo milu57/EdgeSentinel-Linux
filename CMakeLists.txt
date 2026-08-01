@@ -112,3 +112,27 @@ add_test(
     NAME logger_test
     COMMAND test_logger
 )
+
+
+# Build the system resource smoke test program.
+add_executable(test_system_resources
+    tests/test_system_resources.c
+    src/system_monitor.c
+    src/disk_monitor.c
+    src/system_status.c
+)
+
+target_include_directories(test_system_resources PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_system_resources PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME system_resources_test
+    COMMAND test_system_resources
+)
