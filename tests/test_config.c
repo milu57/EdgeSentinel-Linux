@@ -1771,6 +1771,241 @@ static int test_empty_key_or_value_rejected(void)
 }
 
 
+
+/*
+ * 测试包含全部配置项的合法配置文件
+ * 是否能够被完整、准确地读取。
+ */
+static int test_full_valid_configuration_load(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_full_valid.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "# Full valid EdgeSentinel configuration\n"
+            "\n"
+            "monitor_interval=5\n"
+            "process_names=sleep,bash,tail\n"
+            "process_pid=4321\n"
+            "cpu_warning_threshold=60.0\n"
+            "cpu_critical_threshold=85.0\n"
+            "process_cpu_warning_threshold=120.0\n"
+            "process_cpu_critical_threshold=180.0\n"
+            "process_memory_warning_threshold_mib=256.0\n"
+            "process_memory_critical_threshold_mib=512.0\n"
+            "memory_warning_threshold=70.0\n"
+            "memory_critical_threshold=88.0\n"
+            "disk_warning_threshold=75.0\n"
+            "disk_critical_threshold=92.0\n"
+            "log_file=/tmp/edgesentinel-valid.log\n"
+            "log_max_size=2097152\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write full valid configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+
+        return -1;
+    }
+
+    config_set_defaults(&config);
+
+    if (config_load(test_filename, &config) != 0) {
+        fprintf(
+            stderr,
+            "config_load rejected full valid configuration\n"
+        );
+
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    if (config_validate(&config) != 0) {
+        fprintf(
+            stderr,
+            "config_validate rejected loaded valid configuration\n"
+        );
+
+        return -1;
+    }
+
+    if (config.monitor_interval != 5) {
+        fprintf(
+            stderr,
+            "unexpected monitor_interval: %u\n",
+            config.monitor_interval
+        );
+
+        return -1;
+    }
+
+    if (config.process_name_count != 3) {
+        fprintf(
+            stderr,
+            "unexpected process_name_count: %u\n",
+            config.process_name_count
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(config.process_names[0], "sleep") != 0 ||
+        strcmp(config.process_names[1], "bash") != 0 ||
+        strcmp(config.process_names[2], "tail") != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process_names values\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * process_names 非空时，process_name 保存第一个名称，
+     * 用于兼容旧版单进程逻辑。
+     */
+    if (strcmp(config.process_name, "sleep") != 0) {
+        fprintf(
+            stderr,
+            "unexpected compatibility process_name: %s\n",
+            config.process_name
+        );
+
+        return -1;
+    }
+
+    if (config.process_pid != 4321) {
+        fprintf(
+            stderr,
+            "unexpected process_pid: %u\n",
+            config.process_pid
+        );
+
+        return -1;
+    }
+
+    if (
+        config.cpu_warning_threshold != 60.0 ||
+        config.cpu_critical_threshold != 85.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected CPU thresholds\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        config.process_cpu_warning_threshold != 120.0 ||
+        config.process_cpu_critical_threshold != 180.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process CPU thresholds\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        config.process_memory_warning_threshold_mib != 256.0 ||
+        config.process_memory_critical_threshold_mib != 512.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected process memory thresholds\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        config.memory_warning_threshold != 70.0 ||
+        config.memory_critical_threshold != 88.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected memory thresholds\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        config.disk_warning_threshold != 75.0 ||
+        config.disk_critical_threshold != 92.0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected disk thresholds\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.log_file,
+            "/tmp/edgesentinel-valid.log"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected log_file: %s\n",
+            config.log_file
+        );
+
+        return -1;
+    }
+
+    if (config.log_max_size != 2097152UL) {
+        fprintf(
+            stderr,
+            "unexpected log_max_size: %lu\n",
+            config.log_max_size
+        );
+
+        return -1;
+    }
+
+    printf("full valid configuration load test passed\n");
+
+    return 0;
+}
+
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -1905,6 +2140,15 @@ int main(void)
         fprintf(
             stderr,
             "empty key or value rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_full_valid_configuration_load() != 0) {
+        fprintf(
+            stderr,
+            "full valid configuration load test failed\n"
         );
 
         return 1;
