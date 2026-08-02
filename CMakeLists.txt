@@ -143,6 +143,7 @@ add_executable(test_calculations
     tests/test_calculations.c
     src/cpu_monitor.c
     src/network.c
+    src/config.c
 )
 
 target_include_directories(test_calculations PRIVATE

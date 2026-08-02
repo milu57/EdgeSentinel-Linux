@@ -4,9 +4,67 @@
 #include <string.h>
 
 /*
+ * 判断当前网络接口是否应该参与统计。
+ *
+ * 没有配置过滤列表时：
+ *     统计所有非回环接口。
+ *
+ * 配置了过滤列表时：
+ *     只统计列表中出现的接口。
+ *     此时如果用户明确配置 lo，也允许统计 lo。
+ */
+static int network_interface_is_selected(
+    const AppConfig *config,
+    const char *interface_name
+)
+{
+    unsigned int interface_index;
+
+    if (interface_name == NULL) {
+        return 0;
+    }
+
+    /*
+     * 没有过滤配置时，保持旧行为：
+     * 跳过回环接口 lo。
+     */
+    if (
+        config == NULL ||
+        config->network_interface_count == 0
+    ) {
+        return strcmp(interface_name, "lo") != 0;
+    }
+
+    /*
+     * 存在过滤配置时，
+     * 检查当前接口是否出现在配置数组中。
+     */
+    for (
+        interface_index = 0;
+        interface_index <
+            config->network_interface_count;
+        interface_index++
+    ) {
+        if (
+            strcmp(
+                config->network_interfaces[interface_index],
+                interface_name
+            ) == 0
+        ) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
  * 读取 /proc/net/dev 中所有非回环接口的累计网络流量。
  */
-int read_network_info(NetworkInfo *info)
+int read_network_info_filtered(
+    const AppConfig *config,
+    NetworkInfo *info
+)
 {
     FILE *file;
     char line[512];
@@ -18,6 +76,14 @@ int read_network_info(NetworkInfo *info)
     NetworkInfo result = {0, 0};
 
     if (info == NULL) {
+        return -1;
+    }
+
+    if (
+        config != NULL &&
+        config->network_interface_count >
+            CONFIG_MAX_NETWORK_INTERFACES
+    ) {
         return -1;
     }
 
@@ -87,9 +153,14 @@ int read_network_info(NetworkInfo *info)
         }
 
         /*
-         * lo 是回环接口，只表示本机内部通信。
+         * 根据当前配置判断该接口是否参与统计。
          */
-        if (strcmp(interface_name, "lo") == 0) {
+        if (
+            !network_interface_is_selected(
+                config,
+                interface_name
+            )
+        ) {
             continue;
         }
 
@@ -109,6 +180,20 @@ int read_network_info(NetworkInfo *info)
     *info = result;
 
     return 0;
+}
+
+/*
+ * 兼容旧版调用。
+ *
+ * NULL 表示不指定过滤列表，
+ * 因此统计所有非回环接口。
+ */
+int read_network_info(NetworkInfo *info)
+{
+    return read_network_info_filtered(
+        NULL,
+        info
+    );
 }
 
 /*

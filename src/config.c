@@ -84,6 +84,20 @@ void config_set_defaults(AppConfig *config)
 
     config->process_name_count = 0;
 
+    /*
+     * 默认不指定网络接口。
+     *
+     * network_interface_count 为 0 时，
+     * 网络模块统计所有非回环接口。
+     */
+    memset(
+        config->network_interfaces,
+        0,
+        sizeof(config->network_interfaces)
+    );
+
+    config->network_interface_count = 0;
+
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
 
@@ -494,6 +508,135 @@ static int config_set_value(
             config->process_names[0],
             strlen(config->process_names[0]) + 1
         );
+
+    } else if (strcmp(key, "network_interfaces") == 0) {
+        char interfaces_buffer[
+            CONFIG_MAX_NETWORK_INTERFACES *
+            CONFIG_NETWORK_INTERFACE_NAME_LENGTH
+        ];
+
+        char parsed_interfaces
+            [CONFIG_MAX_NETWORK_INTERFACES]
+            [CONFIG_NETWORK_INTERFACE_NAME_LENGTH] = {{0}};
+
+        char *interface_token;
+        char *trimmed_interface;
+        unsigned int interface_count = 0;
+        unsigned int existing_interface_index;
+        size_t interfaces_length;
+        size_t interface_length;
+
+        interfaces_length = strlen(value);
+
+        /*
+         * 拒绝以下包含空接口名称的格式：
+         *
+         *     ,enp0s3
+         *     enp0s3,
+         *     enp0s3,,wlan0
+         */
+        if (
+            value[0] == ',' ||
+            value[interfaces_length - 1] == ',' ||
+            strstr(value, ",,") != NULL
+        ) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        if (interfaces_length >= sizeof(interfaces_buffer)) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        memcpy(
+            interfaces_buffer,
+            value,
+            interfaces_length + 1
+        );
+
+        /*
+         * 使用逗号分割接口名称。
+         *
+         * 示例：
+         *     enp0s3,wlan0
+         */
+        interface_token = strtok(interfaces_buffer, ",");
+
+        while (interface_token != NULL) {
+            if (
+                interface_count >=
+                CONFIG_MAX_NETWORK_INTERFACES
+            ) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            /*
+             * 删除每个接口名称两侧的空白字符。
+             *
+             * 例如：
+             *     "enp0s3, wlan0"
+             *
+             * 第二个名称最终保存为 "wlan0"。
+             */
+            trimmed_interface =
+                trim_whitespace(interface_token);
+
+            interface_length =
+                strlen(trimmed_interface);
+
+            if (
+                interface_length == 0 ||
+                interface_length >=
+                    CONFIG_NETWORK_INTERFACE_NAME_LENGTH
+            ) {
+                return CONFIG_VALUE_INVALID;
+            }
+
+            /*
+             * 不允许重复配置同一个接口。
+             */
+            for (
+                existing_interface_index = 0;
+                existing_interface_index < interface_count;
+                existing_interface_index++
+            ) {
+                if (
+                    strcmp(
+                        parsed_interfaces[
+                            existing_interface_index
+                        ],
+                        trimmed_interface
+                    ) == 0
+                ) {
+                    return CONFIG_VALUE_INVALID;
+                }
+            }
+
+            memcpy(
+                parsed_interfaces[interface_count],
+                trimmed_interface,
+                interface_length + 1
+            );
+
+            interface_count++;
+
+            interface_token = strtok(NULL, ",");
+        }
+
+        if (interface_count == 0) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        /*
+         * 全部解析成功后，再写入正式配置结构体。
+         */
+        memcpy(
+            config->network_interfaces,
+            parsed_interfaces,
+            sizeof(parsed_interfaces)
+        );
+
+        config->network_interface_count =
+            interface_count;
 
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
@@ -931,6 +1074,8 @@ static int validate_process_memory_threshold_pair(
 int config_validate(const AppConfig *config)
 {
     unsigned int process_index;
+    unsigned int network_interface_index;
+    unsigned int previous_interface_index;
 
     if (config == NULL) {
         fprintf(stderr, "Configuration pointer is NULL\n");
@@ -1009,6 +1154,107 @@ int config_validate(const AppConfig *config)
             );
 
             return -1;
+        }
+    }
+
+    /*
+     * 网络接口数量不能超过数组容量。
+     */
+    if (
+        config->network_interface_count >
+        CONFIG_MAX_NETWORK_INTERFACES
+    ) {
+        fprintf(
+            stderr,
+            "Invalid network_interface_count: %u "
+            "exceeds maximum %d\n",
+            config->network_interface_count,
+            CONFIG_MAX_NETWORK_INTERFACES
+        );
+
+        return -1;
+    }
+
+    /*
+     * 检查所有处于有效范围内的接口名称。
+     */
+    for (
+        network_interface_index = 0;
+        network_interface_index <
+            config->network_interface_count;
+        network_interface_index++
+    ) {
+        /*
+         * 有效接口名称不能为空。
+         */
+        if (
+            config->network_interfaces[
+                network_interface_index
+            ][0] == '\0'
+        ) {
+            fprintf(
+                stderr,
+                "Invalid network_interfaces[%u]: "
+                "name is empty\n",
+                network_interface_index
+            );
+
+            return -1;
+        }
+
+        /*
+         * 接口名称必须在数组范围内包含 '\0'。
+         */
+        if (
+            memchr(
+                config->network_interfaces[
+                    network_interface_index
+                ],
+                '\0',
+                CONFIG_NETWORK_INTERFACE_NAME_LENGTH
+            ) == NULL
+        ) {
+            fprintf(
+                stderr,
+                "Invalid network_interfaces[%u]: "
+                "name is not null-terminated\n",
+                network_interface_index
+            );
+
+            return -1;
+        }
+
+        /*
+         * 有效接口列表中不能出现重复名称。
+         */
+        for (
+            previous_interface_index = 0;
+            previous_interface_index <
+                network_interface_index;
+            previous_interface_index++
+        ) {
+            if (
+                strcmp(
+                    config->network_interfaces[
+                        previous_interface_index
+                    ],
+                    config->network_interfaces[
+                        network_interface_index
+                    ]
+                ) == 0
+            ) {
+                fprintf(
+                    stderr,
+                    "Invalid network_interfaces[%u]: "
+                    "duplicate interface name %s\n",
+                    network_interface_index,
+                    config->network_interfaces[
+                        network_interface_index
+                    ]
+                );
+
+                return -1;
+            }
         }
     }
 
@@ -1094,6 +1340,7 @@ int config_validate(const AppConfig *config)
 void config_print(const AppConfig *config)
 {
     unsigned int process_index;
+    unsigned int network_interface_index;
 
     if (config == NULL) {
         return;
@@ -1174,6 +1421,40 @@ void config_print(const AppConfig *config)
             process_index,
             config->process_names[process_index]
         );
+    }
+
+    printf(
+        "network_interface_count    : %u\n",
+        config->network_interface_count
+    );
+
+    if (config->network_interface_count == 0) {
+        /*
+         * 没有指定网络接口时，
+         * 网络模块统计所有非回环接口。
+         */
+        printf(
+            "network_interfaces        : "
+            "(all non-loopback interfaces)\n"
+        );
+    } else {
+        /*
+         * 配置了接口列表时，逐个打印接口名称。
+         */
+        for (
+            network_interface_index = 0;
+            network_interface_index <
+                config->network_interface_count;
+            network_interface_index++
+        ) {
+            printf(
+                "network_interfaces[%u]     : %s\n",
+                network_interface_index,
+                config->network_interfaces[
+                    network_interface_index
+                ]
+            );
+        }
     }
 
     printf("cpu_warning_threshold     : %.2f%%\n",

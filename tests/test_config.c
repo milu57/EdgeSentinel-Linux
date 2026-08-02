@@ -18,7 +18,7 @@ static int test_config_defaults(void)
 {
     AppConfig config;
     unsigned int process_index;
-
+    unsigned int network_interface_index;
     /*
      * 调用被测试函数，
      * 为 config 设置默认配置。
@@ -88,6 +88,45 @@ static int test_config_defaults(void)
                 stderr,
                 "process_names[%u] should be empty\n",
                 process_index
+            );
+
+            return -1;
+        }
+    }
+
+    /*
+     * 默认情况下没有指定网络接口。
+     * 数量为 0 表示统计所有非回环接口。
+     */
+    if (config.network_interface_count != 0) {
+        fprintf(
+            stderr,
+            "unexpected network_interface_count: %u\n",
+            config.network_interface_count
+        );
+
+        return -1;
+    }
+
+    /*
+     * 默认情况下，
+     * network_interfaces 数组中的每个名称都应为空。
+     */
+    for (
+        network_interface_index = 0;
+        network_interface_index <
+            CONFIG_MAX_NETWORK_INTERFACES;
+        network_interface_index++
+    ) {
+        if (
+            config.network_interfaces[
+                network_interface_index
+            ][0] != '\0'
+        ) {
+            fprintf(
+                stderr,
+                "network_interfaces[%u] should be empty\n",
+                network_interface_index
             );
 
             return -1;
@@ -1799,6 +1838,7 @@ static int test_full_valid_configuration_load(void)
             "monitor_interval=5\n"
             "process_names=sleep,bash,tail\n"
             "process_pid=4321\n"
+            "network_interfaces=enp0s3, wlan0\n"
             "cpu_warning_threshold=60.0\n"
             "cpu_critical_threshold=85.0\n"
             "process_cpu_warning_threshold=120.0\n"
@@ -1915,6 +1955,46 @@ static int test_full_valid_configuration_load(void)
         return -1;
     }
 
+    if (config.network_interface_count != 2) {
+        fprintf(
+            stderr,
+            "unexpected network_interface_count: %u\n",
+            config.network_interface_count
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.network_interfaces[0],
+            "enp0s3"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected network_interfaces[0]: %s\n",
+            config.network_interfaces[0]
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.network_interfaces[1],
+            "wlan0"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected network_interfaces[1]: %s\n",
+            config.network_interfaces[1]
+        );
+
+        return -1;
+    }
+
     if (
         config.cpu_warning_threshold != 60.0 ||
         config.cpu_critical_threshold != 85.0
@@ -2005,6 +2085,280 @@ static int test_full_valid_configuration_load(void)
     return 0;
 }
 
+    /*
+     * 测试网络接口配置结构的合法性检查。
+     *
+     * 验证以下非法情况：
+     *
+     * 1. 接口数量超过数组容量；
+     * 2. 有效范围内存在空接口名称；
+     * 3. 接口名称没有字符串结束符；
+     * 4. 接口列表中存在重复名称。
+     */
+    static int test_network_interface_validation(void)
+    {
+        AppConfig config;
+
+        /*
+         * 情况一：
+         * 接口数量超过数组最大容量。
+         */
+        config_set_defaults(&config);
+
+        config.network_interface_count =
+            CONFIG_MAX_NETWORK_INTERFACES + 1;
+
+        if (config_validate(&config) == 0) {
+            fprintf(
+                stderr,
+                "config_validate accepted excessive "
+                "network_interface_count\n"
+            );
+
+            return -1;
+        }
+
+        /*
+         * 情况二：
+         * network_interface_count 声明有两个接口，
+         * 但第二个接口名称仍为空。
+         */
+        config_set_defaults(&config);
+
+        config.network_interface_count = 2;
+
+        snprintf(
+            config.network_interfaces[0],
+            sizeof(config.network_interfaces[0]),
+            "%s",
+            "enp0s3"
+        );
+
+        if (config_validate(&config) == 0) {
+            fprintf(
+                stderr,
+                "config_validate accepted an empty "
+                "network interface slot\n"
+            );
+
+            return -1;
+        }
+
+        /*
+         * 情况三：
+         * 使用字符填满数组，
+         * 故意不保留字符串结束符 '\0'。
+         */
+        config_set_defaults(&config);
+
+        config.network_interface_count = 1;
+
+        memset(
+            config.network_interfaces[0],
+            'A',
+            sizeof(config.network_interfaces[0])
+        );
+
+        if (config_validate(&config) == 0) {
+            fprintf(
+                stderr,
+                "config_validate accepted a network interface "
+                "without null termination\n"
+            );
+
+            return -1;
+        }
+
+        /*
+         * 情况四：
+         * 同一个接口名称出现两次。
+         */
+        config_set_defaults(&config);
+
+        config.network_interface_count = 2;
+
+        snprintf(
+            config.network_interfaces[0],
+            sizeof(config.network_interfaces[0]),
+            "%s",
+            "enp0s3"
+        );
+
+        snprintf(
+            config.network_interfaces[1],
+            sizeof(config.network_interfaces[1]),
+            "%s",
+            "enp0s3"
+        );
+
+        if (config_validate(&config) == 0) {
+            fprintf(
+                stderr,
+                "config_validate accepted duplicate "
+                "network interfaces\n"
+            );
+
+            return -1;
+        }
+
+        printf("network interface validation test passed\n");
+
+        return 0;
+    }
+
+/*
+ * 测试配置文件中的非法网络接口列表
+ * 是否会被 config_load() 拒绝。
+ */
+static int test_invalid_network_interface_lists_rejected(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_invalid_network_interfaces.conf";
+
+    const char *invalid_values[] = {
+        "",
+        ",enp0s3",
+        "enp0s3,",
+        "enp0s3,,wlan0",
+        "enp0s3,   ,wlan0",
+        "enp0s3,wlan0,enp0s3",
+        "if1,if2,if3,if4,if5,if6,if7,if8,if9"
+    };
+
+    const unsigned int invalid_value_count =
+        sizeof(invalid_values) /
+        sizeof(invalid_values[0]);
+
+    FILE *file;
+    AppConfig config;
+    unsigned int case_index;
+    int load_result;
+
+    for (
+        case_index = 0;
+        case_index < invalid_value_count;
+        case_index++
+    ) {
+        /*
+         * 准备一份原有配置。
+         * 非法配置加载失败后，这些值必须保持不变。
+         */
+        config_set_defaults(&config);
+
+        config.monitor_interval = 17;
+        config.network_interface_count = 1;
+
+        snprintf(
+            config.network_interfaces[0],
+            sizeof(config.network_interfaces[0]),
+            "%s",
+            "original0"
+        );
+
+        file = fopen(test_filename, "w");
+
+        if (file == NULL) {
+            perror("fopen");
+            return -1;
+        }
+
+        if (
+            fprintf(
+                file,
+                "monitor_interval=30\n"
+                "network_interfaces=%s\n",
+                invalid_values[case_index]
+            ) < 0
+        ) {
+            fprintf(
+                stderr,
+                "failed to write invalid network interface configuration\n"
+            );
+
+            fclose(file);
+            remove(test_filename);
+
+            return -1;
+        }
+
+        if (fclose(file) != 0) {
+            perror("fclose");
+            remove(test_filename);
+
+            return -1;
+        }
+
+        load_result =
+            config_load(test_filename, &config);
+
+        if (remove(test_filename) != 0) {
+            perror("remove");
+            return -1;
+        }
+
+        /*
+         * 所有测试值都属于非法接口配置，
+         * 因此 config_load() 必须失败。
+         */
+        if (load_result == 0) {
+            fprintf(
+                stderr,
+                "config_load accepted invalid "
+                "network_interfaces value: %s\n",
+                invalid_values[case_index]
+            );
+
+            return -1;
+        }
+
+        /*
+         * 验证失败的配置没有部分覆盖原配置。
+         */
+        if (config.monitor_interval != 17) {
+            fprintf(
+                stderr,
+                "invalid network interface configuration "
+                "changed monitor_interval: %u\n",
+                config.monitor_interval
+            );
+
+            return -1;
+        }
+
+        if (config.network_interface_count != 1) {
+            fprintf(
+                stderr,
+                "invalid network interface configuration "
+                "changed network_interface_count: %u\n",
+                config.network_interface_count
+            );
+
+            return -1;
+        }
+
+        if (
+            strcmp(
+                config.network_interfaces[0],
+                "original0"
+            ) != 0
+        ) {
+            fprintf(
+                stderr,
+                "invalid network interface configuration "
+                "changed original interface: %s\n",
+                config.network_interfaces[0]
+            );
+
+            return -1;
+        }
+    }
+
+    printf(
+        "invalid network interface lists rejection test passed\n"
+    );
+
+    return 0;
+}
 
 int main(void)
 {
@@ -2095,6 +2449,27 @@ int main(void)
         fprintf(
             stderr,
             "process name null termination validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_network_interface_validation() != 0) {
+        fprintf(
+            stderr,
+            "network interface validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (
+        test_invalid_network_interface_lists_rejected() != 0
+    ) {
+        fprintf(
+            stderr,
+            "invalid network interface lists "
+            "rejection test failed\n"
         );
 
         return 1;

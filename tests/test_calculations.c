@@ -398,6 +398,123 @@ static int test_network_speed_conversion(void)
 }
 
 /*
+ * 测试根据配置过滤网络接口的读取逻辑。
+ */
+static int test_filtered_network_reading(void)
+{
+    AppConfig config;
+    NetworkInfo loopback_info;
+    NetworkInfo missing_interface_info;
+
+    /*
+     * 明确选择 lo 时，
+     * read_network_info_filtered() 应正常读取。
+     */
+    config_set_defaults(&config);
+
+    config.network_interface_count = 1;
+
+    snprintf(
+        config.network_interfaces[0],
+        sizeof(config.network_interfaces[0]),
+        "%s",
+        "lo"
+    );
+
+    if (
+        read_network_info_filtered(
+            &config,
+            &loopback_info
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to read selected loopback interface\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 配置一个不存在的接口时，
+     * 读取函数本身仍然成功，
+     * 但累计接收和发送字节数都应为 0。
+     */
+    config_set_defaults(&config);
+
+    config.network_interface_count = 1;
+
+    snprintf(
+        config.network_interfaces[0],
+        sizeof(config.network_interfaces[0]),
+        "%s",
+        "edgesentinel_missing0"
+    );
+
+    if (
+        read_network_info_filtered(
+            &config,
+            &missing_interface_info
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to process a missing network interface\n"
+        );
+
+        return -1;
+    }
+
+    if (
+        missing_interface_info.rx_bytes != 0 ||
+        missing_interface_info.tx_bytes != 0
+    ) {
+        fprintf(
+            stderr,
+            "missing network interface produced traffic: "
+            "rx=%llu tx=%llu\n",
+            (unsigned long long)
+                missing_interface_info.rx_bytes,
+            (unsigned long long)
+                missing_interface_info.tx_bytes
+        );
+
+        return -1;
+    }
+
+    /*
+     * 接口数量超过配置数组容量时，
+     * 读取函数必须拒绝该配置。
+     */
+    config.network_interface_count =
+        CONFIG_MAX_NETWORK_INTERFACES + 1;
+
+    if (
+        read_network_info_filtered(
+            &config,
+            &missing_interface_info
+        ) == 0
+    ) {
+        fprintf(
+            stderr,
+            "filtered network reading accepted excessive "
+            "interface count\n"
+        );
+
+        return -1;
+    }
+
+    printf(
+        "filtered network reading tests passed: "
+        "lo_rx=%llu lo_tx=%llu\n",
+        (unsigned long long)loopback_info.rx_bytes,
+        (unsigned long long)loopback_info.tx_bytes
+    );
+
+    return 0;
+}
+
+/*
  * 验证 CPU 和网络累计数据能从当前 Linux 系统读取。
  */
 static int test_live_cpu_and_network_reading(void)
@@ -446,6 +563,10 @@ int main(void)
     }
 
     if (test_network_speed_conversion() != 0) {
+        return 1;
+    }
+
+    if (test_filtered_network_reading() != 0) {
         return 1;
     }
 

@@ -4,6 +4,9 @@
 #define CONFIG_PATH_LENGTH 256
 #define CONFIG_MAX_PROCESS_NAMES 8
 #define CONFIG_PROCESS_NAME_LENGTH 256
+#define CONFIG_MAX_NETWORK_INTERFACES 8
+#define CONFIG_NETWORK_INTERFACE_NAME_LENGTH 32
+
 
 /*
  * EdgeSentinel-Linux 全局配置
@@ -45,6 +48,24 @@ typedef struct {
      * process_names 数组中实际保存了多少个名称。
      */
     unsigned int process_name_count;
+
+    /*
+     * 需要监控的网络接口名称列表。
+     *
+     * network_interface_count == 0：
+     *     统计所有非回环网络接口。
+     *
+     * network_interface_count > 0：
+     *     只统计列表中指定的网络接口。
+     */
+    char network_interfaces
+        [CONFIG_MAX_NETWORK_INTERFACES]
+        [CONFIG_NETWORK_INTERFACE_NAME_LENGTH];
+
+    /*
+     * network_interfaces 数组中实际保存的接口数量。
+     */
+    unsigned int network_interface_count;
 
     /* CPU 告警阈值 */
     double cpu_warning_threshold;
