@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.7.0**
+**v1.8.0**
 
 ---
 
@@ -30,7 +30,12 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 根文件系统磁盘使用率监控
 - 网络累计接收和发送流量监控
 - 网络实时上传和下载速度监控
-- 自动忽略回环网络接口
+- 默认统计所有非回环网络接口
+- 支持通过 `network_interfaces` 选择需要统计的网络接口
+- 支持同时统计多个指定网络接口
+- 多个网络接口名称使用英文逗号分隔
+- 单次最多支持配置 8 个网络接口
+- 显式配置 `lo` 时支持监控本机回环流量
 - CPU、内存和磁盘告警分级
 - 综合系统状态判断
 
@@ -79,6 +84,9 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 非法的新配置不会覆盖当前生效配置
 - 支持热更新监控间隔和告警阈值
 - 支持热更新目标进程名称和目标进程 PID
+- 支持热更新网络接口过滤列表
+- 网络接口列表变化后自动重置网速采样基准
+- 热加载后的第一轮网络采样只建立新基准，避免异常瞬时速度
 - 进程监控目标改变后自动重新初始化采样状态
 - 支持热更新日志文件路径和日志轮转大小
 - 配置格式校验
@@ -173,7 +181,14 @@ EdgeSentinel-Linux/
 │   └── system_status.c
 │
 ├── tests/
-│   └── test_process_monitor.c
+│   ├── test_process_monitor.c
+│   ├── test_config.c
+│   ├── test_alert.c
+│   ├── test_logger.c
+│   ├── test_system_resources.c
+│   ├── test_calculations.c
+│   ├── test_startup.sh
+│   ├── test_invalid_config_startup.sh
 │   └── process_memory_growth.c
 │
 ├── scripts/
@@ -236,6 +251,40 @@ cmake --build build --clean-first
 ```
 
 该命令会先清理旧的目标文件，再重新编译整个项目。
+
+---
+
+## 自动化测试
+
+完成 CMake 配置和编译后，可以运行全部自动化测试：
+
+~~~bash
+ctest --test-dir build --output-on-failure
+~~~
+
+当前测试集合包括：
+
+- 进程监控测试；
+- 配置解析与配置合法性测试；
+- 告警等级测试；
+- 日志与日志轮转测试；
+- 系统资源读取测试；
+- CPU 和网络计算测试；
+- 程序启动与安全退出集成测试；
+- 非法配置启动集成测试。
+
+测试全部通过时会显示：
+
+~~~text
+100% tests passed, 0 tests failed out of 8
+~~~
+
+也可以单独运行某个测试程序，例如：
+
+~~~bash
+./build/test_config
+./build/test_calculations
+~~~
 
 ---
 
@@ -349,6 +398,10 @@ CPU: [COLLECTING]
 
 下一轮采样才会显示 CPU 使用率。
 
+`network_interfaces` 也可以在程序运行期间通过 `SIGHUP` 动态修改。网络接口列表发生变化后，程序会按照新接口重新读取累计流量，并重置网速采样基准。
+
+热加载后的第一轮网络采样只用于建立新基准，上传和下载速度显示为 `0.00 B/s`；从下一轮开始计算新接口的实际网速。这样可以避免新旧接口累计流量直接比较，或者因采样时间过短而产生异常瞬时速度。
+
 如果新配置加载或校验失败，EdgeSentinel 会继续使用当前已经生效的旧配置。
 
 ---
@@ -385,6 +438,11 @@ process_name=
 # 大于 0 表示监控指定 PID
 process_pid=0
 
+
+# 可选的网络接口过滤配置
+# 不配置该选项时，默认监控所有非回环网络接口
+# 配置多个接口时，使用英文逗号分隔
+# 示例：network_interfaces=enp0s3,wlan0
 
 # 整个系统的 CPU 使用率告警阈值
 cpu_warning_threshold=70.0
@@ -440,10 +498,45 @@ process_names=sleep,bash,tail
 按进程名称监控时，目标进程的 PID 可以发生变化。如果某个目标进程尚未启动，该目标会保持等待状态，但不会影响其他进程和系统资源监控。目标进程启动后，程序会自动获取其 PID；目标退出后会重新进入查找状态，并在目标重新启动后自动跟踪新的 PID。
 
 
+## 网络接口过滤规则
+
+不配置 `network_interfaces` 时，EdgeSentinel 默认统计 `/proc/net/dev` 中的所有非回环网络接口，并忽略 `lo`。
+
+只统计一个指定接口：
+
+~~~ini
+network_interfaces=enp0s3
+~~~
+
+同时统计多个接口：
+
+~~~ini
+network_interfaces=enp0s3,wlan0
+~~~
+
+多个接口名称使用英文逗号分隔，单次最多支持配置 8 个接口。程序会自动删除接口名称两侧的空白字符。
+
+显式配置回环接口：
+
+~~~ini
+network_interfaces=lo
+~~~
+
+此时程序会统计访问 `127.0.0.1` 等本机内部通信产生的回环流量。
+
+以下配置会被拒绝：
+
+- 以逗号开头或结尾；
+- 两个逗号之间存在空接口名称；
+- 接口名称重复；
+- 接口数量超过 8 个；
+- 单个接口名称过长。
+
 - `monitor_interval`：监控采样间隔，单位为秒；
 - `process_names`：多个目标进程名称，使用英文逗号分隔，最多支持 8 个；
 - `process_name`：兼容旧版本的单个目标进程名称；
 - `process_pid`：单个目标进程 PID；
+- `network_interfaces`：需要统计的网络接口列表，使用英文逗号分隔，最多支持 8 个；不配置时统计所有非回环接口；
 - `cpu_warning_threshold`：系统 CPU WARNING 阈值；
 - `cpu_critical_threshold`：系统 CPU CRITICAL 阈值；
 - `process_cpu_warning_threshold`：目标进程 CPU WARNING 阈值；
@@ -1339,6 +1432,36 @@ tail -n 30 logs/edgesentinel.log
 ---
 
 ## 版本说明
+
+### v1.8.0
+
+- 新增 `network_interfaces` 网络接口过滤配置项；
+- 默认统计所有非回环网络接口；
+- 支持指定一个或多个网络接口；
+- 多个接口名称使用英文逗号分隔；
+- 单次最多支持配置 8 个网络接口；
+- 支持清理接口名称两侧的空白字符；
+- 拒绝空名称、重复名称、过长名称和超量接口配置；
+- 显式配置 `lo` 时支持统计本机回环流量；
+- 新增 `read_network_info_filtered()` 网络读取接口；
+- 保留 `read_network_info()` 兼容接口；
+- 支持通过 `SIGHUP` 动态切换网络接口；
+- 网络接口改变后自动重置网速采样基准；
+- 热加载后的第一轮网络采样只建立新基准；
+- 新增网络接口配置解析、校验和读取自动测试。
+
+### v1.7.0
+
+- 新增基于 CTest 的自动化测试体系；
+- 新增配置模块自动测试；
+- 新增告警模块自动测试；
+- 新增日志模块自动测试；
+- 新增系统资源读取测试；
+- 新增 CPU 和网络计算测试；
+- 新增程序启动与安全退出集成测试；
+- 新增非法配置启动集成测试；
+- 新增多进程配置边界和合法性测试；
+- 支持通过 `ctest --test-dir build --output-on-failure` 运行全部测试。
 
 ### v1.6.0
 

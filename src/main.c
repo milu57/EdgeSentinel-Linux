@@ -839,6 +839,14 @@ int main(int argc, char *argv[])
      */
     double network_elapsed_seconds;
 
+    /*
+     * 标记网络采样基准是否刚刚因热加载而重置。
+     *
+     * 1：下一次采样只建立新基准，不计算网速；
+     * 0：正常计算网速。
+     */
+    int network_baseline_reset = 0;
+
     char log_message[256];
     int log_message_length;
 
@@ -928,7 +936,12 @@ int main(int argc, char *argv[])
      *
      * 程序启动时先读取第一次网络流量。
      */
-    if (read_network_info(&previous_network) != 0)
+    if (
+        read_network_info_filtered(
+            &config,
+            &previous_network
+        ) != 0
+    )
     {
         fprintf(
             stderr,
@@ -1036,9 +1049,39 @@ int main(int argc, char *argv[])
     }
 
     printf("Monitoring disk mount point: /\n");
-    printf(
-        "Monitoring all non-loopback network interfaces.\n"
-    );
+    if (config.network_interface_count == 0)
+    {
+        printf(
+            "Monitoring all non-loopback network interfaces.\n"
+        );
+    }
+    else
+    {
+        unsigned int network_interface_index;
+
+        printf("Monitoring selected network interfaces:");
+
+        for (
+            network_interface_index = 0;
+            network_interface_index <
+                config.network_interface_count;
+            network_interface_index++
+        )
+        {
+            printf(
+                "%s%s",
+                network_interface_index == 0
+                    ? " "
+                    : ", ",
+                config.network_interfaces[
+                    network_interface_index
+                ]
+            );
+        }
+
+        printf(".\n");
+    }
+
     printf("Press Ctrl+C to stop.\n\n");
 
     /*
@@ -1113,6 +1156,32 @@ int main(int argc, char *argv[])
                     "keeping previous configuration.\n"
                 );
             }
+            else if (
+                read_network_info_filtered(
+                    &reloaded_config,
+                    &current_network
+                ) != 0
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Failed to read network baseline for "
+                    "reloaded configuration, "
+                    "keeping previous configuration.\n"
+                );
+            }
+            else if (
+                clock_gettime(
+                    CLOCK_MONOTONIC,
+                    &current_network_time
+                ) != 0
+            )
+            {
+                perror(
+                    "clock_gettime for reloaded "
+                    "network configuration"
+                );
+            }
             else
             {
                 /*
@@ -1120,7 +1189,22 @@ int main(int argc, char *argv[])
                  */
                 config = reloaded_config;
 
-                                /*
+                /*
+                 * 网络接口列表可能已经发生变化。
+                 *
+                 * 将按照新配置读取的累计流量和采样时间
+                 * 设为新的速度计算基准，防止新旧接口的
+                 * 累计值直接相减。
+                 */
+                previous_network =
+                    current_network;
+
+                previous_network_time =
+                    current_network_time;
+
+                network_baseline_reset = 1;
+
+                /*
                  * 根据新配置重新确定实际监控进程数量。
                  */
                 if (config.process_name_count > 0)
@@ -1367,7 +1451,12 @@ int main(int argc, char *argv[])
         /*
          * 读取当前累计网络流量。
          */
-        if (read_network_info(&current_network) != 0)
+        if (
+            read_network_info_filtered(
+                &config,
+                &current_network
+            ) != 0
+        )
         {
             fprintf(
                 stderr,
@@ -1390,30 +1479,55 @@ int main(int argc, char *argv[])
         }
 
         /*
-         * 计算前后两次网络采样之间经过的真实时间。
+         * 热加载刚刚修改了网络接口列表时，
+         * 当前采样只用于建立稳定的新基准。
+         *
+         * 不立即使用很短的时间差计算网速，
+         * 避免出现不具有代表性的瞬时高值。
          */
-        network_elapsed_seconds =
-            calculate_elapsed_seconds(
-                &previous_network_time,
-                &current_network_time
-            );
-
-        /*
-         * 根据累计流量差值和时间差计算实时网速。
-         */
-        if (calculate_network_speed(
-                &previous_network,
-                &current_network,
-                network_elapsed_seconds,
-                &network_speed
-            ) != 0)
+        if (network_baseline_reset)
         {
-            fprintf(
-                stderr,
-                "Failed to calculate network speed\n"
-            );
+            previous_network =
+                current_network;
 
-            return 1;
+            previous_network_time =
+                current_network_time;
+
+            network_speed.download_bytes_per_sec = 0.0;
+            network_speed.upload_bytes_per_sec = 0.0;
+
+            network_baseline_reset = 0;
+        }
+        else
+        {
+            /*
+             * 计算前后两次网络采样之间经过的真实时间。
+             */
+            network_elapsed_seconds =
+                calculate_elapsed_seconds(
+                    &previous_network_time,
+                    &current_network_time
+                );
+
+            /*
+             * 根据累计流量差值和时间差计算实时网速。
+             */
+            if (
+                calculate_network_speed(
+                    &previous_network,
+                    &current_network,
+                    network_elapsed_seconds,
+                    &network_speed
+                ) != 0
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Failed to calculate network speed\n"
+                );
+
+                return 1;
+            }
         }
 
         /*

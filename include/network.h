@@ -2,6 +2,7 @@
 #define NETWORK_H
 
 #include <stdint.h>
+#include "config.h"
 
 /*
  * 某个采样时刻的累计网络流量。
@@ -39,6 +40,20 @@ typedef struct {
  * 成功返回 0，失败返回 -1。
  */
 int read_network_info(NetworkInfo *info);
+
+/*
+ * 按配置读取累计网络流量。
+ *
+ * config == NULL 或 network_interface_count == 0：
+ *     统计所有非回环接口。
+ *
+ * network_interface_count > 0：
+ *     只统计 network_interfaces 中列出的接口。
+ */
+int read_network_info_filtered(
+    const AppConfig *config,
+    NetworkInfo *info
+);
 
 /*
  * 根据两次累计流量和时间间隔计算实时网速。
