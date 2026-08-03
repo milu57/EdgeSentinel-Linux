@@ -10,6 +10,7 @@
 #include "disk_monitor.h"
 #include "logger.h"
 #include "network.h"
+#include "output.h"
 #include "process_monitor.h"
 #include "system_monitor.h"
 #include "system_status.h"
@@ -136,7 +137,8 @@ static double calculate_elapsed_seconds(
  */
 static int monitor_process_once(
     MonitoredProcess *process,
-    const AppConfig *config
+    const AppConfig *config,
+    FILE *status_stream
 )
 {
 
@@ -146,7 +148,11 @@ static int monitor_process_once(
     char log_message[256];
     int log_message_length;
 
-    if (process == NULL || config == NULL)
+    if (
+        process == NULL ||
+        config == NULL ||
+        status_stream == NULL
+    )
     {
         fprintf(
             stderr,
@@ -172,7 +178,8 @@ static int monitor_process_once(
             ) == 0
         )
         {
-            printf(
+            fprintf(
+                status_stream,
                 "Target process found: %s (PID: %d)\n",
                 process->target_name,
                 process->current_pid
@@ -555,6 +562,30 @@ int main(int argc, char *argv[])
      */
     const char *config_file = DEFAULT_CONFIG_FILE;
 
+    /*
+     * 默认保持原来的文本输出方式。
+     *
+     * 用户可以通过：
+     *
+     *     --output json
+     *
+     * 切换为 JSON 输出。
+     */
+    OutputFormat output_format = OUTPUT_FORMAT_TEXT;
+
+    /*
+     * 普通文本模式下，状态提示输出到 stdout。
+     *
+     * JSON 模式下，stdout 必须只保留 JSON，
+     * 因此启动信息和诊断信息改为输出到 stderr。
+     */
+    FILE *status_stream;
+
+    /*
+     * 遍历命令行参数时使用的数组下标。
+     */
+    int argument_index;
+
     AppConfig config;
     AppConfig reloaded_config;
 
@@ -576,31 +607,150 @@ int main(int argc, char *argv[])
     int initial_process_pid = 0;
 
     /*
-     * 不带参数：
+     * 逐个解析命令行参数。
+     *
+     * 当前支持：
      *
      *     ./edgesentinel
      *
-     * 使用默认配置文件。
+     *     ./edgesentinel -c config/edgesentinel.conf
      *
-     * 带两个参数：
+     *     ./edgesentinel --output json
      *
-     *     ./edgesentinel -c 配置文件路径
+     *     ./edgesentinel
+     *         -c config/edgesentinel.conf
+     *         --output json
      *
-     * 使用用户指定的配置文件。
+     * -c 和 --output 的前后顺序不受限制。
      */
-    if (argc == 3 && strcmp(argv[1], "-c") == 0)
+    for (
+        argument_index = 1;
+        argument_index < argc;
+        argument_index++
+    )
     {
-        config_file = argv[2];
-    }
-    else if (argc != 1)
-    {
-        fprintf(
-            stderr,
-            "Usage: %s [-c config_file]\n",
-            argv[0]
-        );
+        /*
+         * 读取配置文件路径。
+         */
+        if (strcmp(argv[argument_index], "-c") == 0)
+        {
+            /*
+             * -c 后面必须还有一个参数，
+             * 作为配置文件路径。
+             */
+            if (argument_index + 1 >= argc)
+            {
+                fprintf(
+                    stderr,
+                    "Missing configuration file after -c.\n"
+                );
 
-        return 1;
+                fprintf(
+                    stderr,
+                    "Usage: %s "
+                    "[-c config_file] "
+                    "[--output text|json]\n",
+                    argv[0]
+                );
+
+                return 1;
+            }
+
+            /*
+             * 跳到下一个参数并保存配置文件路径。
+             */
+            argument_index++;
+            config_file = argv[argument_index];
+        }
+        /*
+         * 读取输出格式。
+         */
+        else if (
+            strcmp(
+                argv[argument_index],
+                "--output"
+            ) == 0
+        )
+        {
+            /*
+             * --output 后面必须还有 text 或 json。
+             */
+            if (argument_index + 1 >= argc)
+            {
+                fprintf(
+                    stderr,
+                    "Missing format after --output.\n"
+                );
+
+                fprintf(
+                    stderr,
+                    "Usage: %s "
+                    "[-c config_file] "
+                    "[--output text|json]\n",
+                    argv[0]
+                );
+
+                return 1;
+            }
+
+            /*
+             * 跳到输出格式字符串。
+             */
+            argument_index++;
+
+            if (
+                output_parse_format(
+                    argv[argument_index],
+                    &output_format
+                ) != 0
+            )
+            {
+                fprintf(
+                    stderr,
+                    "Invalid output format: %s\n",
+                    argv[argument_index]
+                );
+
+                fprintf(
+                    stderr,
+                    "Supported output formats: "
+                    "text, json\n"
+                );
+
+                return 1;
+            }
+        }
+        /*
+         * 既不是 -c，也不是 --output，
+         * 说明出现了程序无法识别的参数。
+         */
+        else
+        {
+            fprintf(
+                stderr,
+                "Unknown argument: %s\n",
+                argv[argument_index]
+            );
+
+            fprintf(
+                stderr,
+                "Usage: %s "
+                "[-c config_file] "
+                "[--output text|json]\n",
+                argv[0]
+            );
+
+            return 1;
+        }
+    }
+
+    if (output_format == OUTPUT_FORMAT_JSON)
+    {
+        status_stream = stderr;
+    }
+    else
+    {
+        status_stream = stdout;
     }
 
     /*
@@ -709,7 +859,8 @@ int main(int argc, char *argv[])
             {
                 initial_process_pid = 0;
 
-                printf(
+                fprintf(
+                    status_stream,
                     "Target process is not running yet: %s\n",
                     target_process_name
                 );
@@ -751,8 +902,20 @@ int main(int argc, char *argv[])
      * 暂时打印最终生效的配置，验证读取是否成功。
      */
 
-    printf("Configuration file: %s\n", config_file);
-    config_print(&config);
+    fprintf(
+        status_stream,
+        "Configuration file: %s\n",
+        config_file
+    );
+
+    /*
+     * config_print() 当前固定输出到 stdout。
+     * JSON 模式下暂时不调用，避免污染 JSON Lines。
+     */
+    if (output_format == OUTPUT_FORMAT_TEXT)
+    {
+        config_print(&config);
+    }
 
     struct sigaction action;
 
@@ -795,6 +958,14 @@ int main(int argc, char *argv[])
     SystemUptime system_uptime;
     LoadAverage load_average;
     CurrentTime current_time;
+
+    /*
+     * 集中保存当前一轮采样产生的全部监控结果。
+     *
+     * 文本输出和 JSON 输出读取同一份快照，
+     * 不再分别读取或计算系统数据。
+     */
+    MonitorSnapshot snapshot = {0};
 
     /*
      * 各项资源的告警等级。
@@ -1001,7 +1172,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("EdgeSentinel system monitor started.\n");
+    fprintf(
+        status_stream,
+        "EdgeSentinel system monitor started.\n"
+    );
 
     /*
      * 输出所有目标进程的启动状态。
@@ -1019,16 +1193,18 @@ int main(int argc, char *argv[])
         {
             if (active_process->current_pid > 0)
             {
-                printf(
+                fprintf(
+                    status_stream,
                     "Monitoring process[%zu]: %s (PID: %d)\n",
                     process_index,
                     active_process->target_name,
                     active_process->current_pid
                 );
             }
-            else
+           else
             {
-                printf(
+                fprintf(
+                    status_stream,
                     "Waiting for process[%zu]: %s\n",
                     process_index,
                     active_process->target_name
@@ -1037,7 +1213,8 @@ int main(int argc, char *argv[])
         }
         else
         {
-            printf(
+            fprintf(
+                status_stream,
                 "Monitoring process[%zu] PID: %d%s\n",
                 process_index,
                 active_process->current_pid,
@@ -1048,10 +1225,11 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("Monitoring disk mount point: /\n");
+    fprintf(status_stream,"Monitoring disk mount point: /\n");
     if (config.network_interface_count == 0)
     {
-        printf(
+        fprintf(
+            status_stream,
             "Monitoring all non-loopback network interfaces.\n"
         );
     }
@@ -1059,7 +1237,7 @@ int main(int argc, char *argv[])
     {
         unsigned int network_interface_index;
 
-        printf("Monitoring selected network interfaces:");
+        fprintf(status_stream,"Monitoring selected network interfaces:");
 
         for (
             network_interface_index = 0;
@@ -1068,7 +1246,8 @@ int main(int argc, char *argv[])
             network_interface_index++
         )
         {
-            printf(
+            fprintf(
+                status_stream,
                 "%s%s",
                 network_interface_index == 0
                     ? " "
@@ -1079,10 +1258,10 @@ int main(int argc, char *argv[])
             );
         }
 
-        printf(".\n");
+        fprintf(status_stream,".\n");
     }
 
-    printf("Press Ctrl+C to stop.\n\n");
+    fprintf(status_stream,"Press Ctrl+C to stop.\n\n");
 
     /*
      * 只要 keep_running 不等于 0，
@@ -1325,12 +1504,15 @@ int main(int argc, char *argv[])
                 active_process =
                     &monitored_processes[0];
 
-                printf(
+                fprintf(
+                    status_stream,
                     "Configuration reloaded successfully.\n"
                 );
 
-                config_print(&config);
-
+                if (output_format == OUTPUT_FORMAT_TEXT)
+                {
+                    config_print(&config);
+                }
                 /*
                  * 输出热加载后的所有目标进程。
                  */
@@ -1347,7 +1529,8 @@ int main(int argc, char *argv[])
                     {
                         if (active_process->current_pid > 0)
                         {
-                            printf(
+                            fprintf(
+                                status_stream,
                                 "Monitoring process[%zu]: "
                                 "%s (PID: %d)\n",
                                 process_index,
@@ -1357,7 +1540,8 @@ int main(int argc, char *argv[])
                         }
                         else
                         {
-                            printf(
+                            fprintf(
+                                status_stream,
                                 "Waiting for process[%zu]: %s\n",
                                 process_index,
                                 active_process->target_name
@@ -1366,7 +1550,8 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        printf(
+                        fprintf(
+                            status_stream,
                             "Monitoring process[%zu] PID: %d%s\n",
                             process_index,
                             active_process->current_pid,
@@ -1399,8 +1584,9 @@ int main(int argc, char *argv[])
             if (
                 monitor_process_once(
                     active_process,
-                    &config
-                ) != 0
+                    &config,
+                    status_stream
+            ) != 0
             )
             {
                 return 1;
@@ -1819,214 +2005,303 @@ int main(int argc, char *argv[])
         }
 
         /*
-         * 输出当前时间。
+         * 将当前一轮已经读取和计算完成的数据
+         * 集中放入 MonitorSnapshot。
          */
-        printf(
-            "Updated:          "
-            "%04d-%02d-%02d %02d:%02d:%02d\n",
-            current_time.year,
-            current_time.month,
-            current_time.day,
-            current_time.hour,
-            current_time.minute,
-            current_time.second
-        );
+        snapshot.current_time = current_time;
+        snapshot.uptime = system_uptime;
+        snapshot.load_average = load_average;
+
+        snapshot.cpu_usage_percent = cpu_usage;
+        snapshot.cpu_level = cpu_level;
+
+        snapshot.total_memory_kb =
+            memory_info.total_kb;
+
+        snapshot.available_memory_kb =
+            memory_info.available_kb;
+
+        snapshot.used_memory_kb =
+            memory_info.used_kb;
+
+        snapshot.memory_usage_percent =
+            memory_info.usage_percent;
+
+        snapshot.memory_level =
+            memory_level;
+
+        snapshot.total_disk_bytes =
+            disk_info.total_bytes;
+
+        snapshot.used_disk_bytes =
+            disk_info.used_bytes;
+
+        snapshot.available_disk_bytes =
+            disk_info.available_bytes;
+
+        snapshot.disk_usage_percent =
+            disk_info.usage_percent;
+
+        snapshot.disk_level =
+            disk_level;
+
+        snapshot.system_level =
+            system_level;
+
+        snapshot.network_receive_total_bytes =
+            (unsigned long long)current_network.rx_bytes;
+
+        snapshot.network_transmit_total_bytes =
+            (unsigned long long)current_network.tx_bytes;
+
+        snapshot.download_bytes_per_second =
+            network_speed.download_bytes_per_sec;
+
+        snapshot.upload_bytes_per_second =
+            network_speed.upload_bytes_per_sec;
 
         /*
-         * 输出系统运行时间。
+         * 不复制进程数组，只保存数组首地址和有效数量。
          */
-        printf(
-            "System Uptime:    "
-            "%llu days %u hours %u minutes %u seconds\n",
-            system_uptime.days,
-            system_uptime.hours,
-            system_uptime.minutes,
-            system_uptime.seconds
-        );
+        snapshot.processes =
+            monitored_processes;
+
+        snapshot.process_count =
+            monitored_process_count;
 
         /*
-         * 输出 1、5、15 分钟平均负载。
+         * JSON 模式直接调用结构化输出模块。
          */
-        printf(
-            "Load Average:     %.2f  %.2f  %.2f\n",
-            load_average.one_minute,
-            load_average.five_minutes,
-            load_average.fifteen_minutes
-        );
-
-        /*
-         * 输出 CPU 使用率及其告警状态。
-         */
-        printf(
-            "CPU Usage:        %6.2f%% [%s]\n",
-            cpu_usage,
-            alert_level_to_string(cpu_level)
-        );
-
-        /*
-         * 输出内存使用率及其告警状态。
-         */
-        printf(
-            "Memory Usage:     %6.2f%% [%s]\n",
-            memory_info.usage_percent,
-            alert_level_to_string(memory_level)
-        );
-
-        /*
-         * 输出磁盘使用率及其告警状态。
-         */
-        printf(
-            "Disk Usage:       %6.2f%% [%s]\n",
-            disk_info.usage_percent,
-            alert_level_to_string(disk_level)
-        );
-
-        /*
-         * 输出整个系统的统一告警状态。
-         */
-        printf(
-            "System Status:           [%s]\n",
-            alert_level_to_string(system_level)
-        );
-
-        /*
-         * 依次输出所有被监控进程的状态。
-         */
-        for (
-            process_index = 0;
-            process_index < monitored_process_count;
-            process_index++
-        )
+        if (output_format == OUTPUT_FORMAT_JSON)
         {
-            active_process =
-                &monitored_processes[process_index];
-
-            if (active_process->available)
+            if (output_print_json(&snapshot) != 0)
             {
-                printf(
-                    "Process[%zu]:       %s PID=%d PPID=%d\n",
-                    process_index,
-                    active_process->info.name,
-                    active_process->info.pid,
-                    active_process->info.parent_pid
+                fprintf(
+                    stderr,
+                    "Failed to print JSON monitoring output\n"
                 );
 
-                printf(
-                    "  State:           %s\n",
-                    active_process->info.state
-                );
+                return 1;
+            }
 
-                printf(
-                    "  Memory:          %.2f MiB [%s]\n",
-                    active_process->memory_mib,
-                    alert_level_to_string(
-                        active_process->memory_level
-                    )
-                );
+            /*
+             * stdout 被重定向到文件或管道时通常使用缓冲。
+             * 主动刷新，确保每一轮 JSON 立即可见。
+             */
+            fflush(stdout);
+        }
+        else
+        {
 
-                if (active_process->cpu_usage_valid)
+            /*
+             * 输出当前时间。
+             */
+            printf(
+                "Updated:          "
+                "%04d-%02d-%02d %02d:%02d:%02d\n",
+                current_time.year,
+                current_time.month,
+                current_time.day,
+                current_time.hour,
+                current_time.minute,
+                current_time.second
+            );
+
+            /*
+             * 输出系统运行时间。
+             */
+            printf(
+                "System Uptime:    "
+                "%llu days %u hours %u minutes %u seconds\n",
+                system_uptime.days,
+                system_uptime.hours,
+                system_uptime.minutes,
+                system_uptime.seconds
+            );
+
+            /*
+             * 输出 1、5、15 分钟平均负载。
+             */
+            printf(
+                "Load Average:     %.2f  %.2f  %.2f\n",
+                load_average.one_minute,
+                load_average.five_minutes,
+                load_average.fifteen_minutes
+            );
+
+            /*
+             * 输出 CPU 使用率及其告警状态。
+             */
+            printf(
+                "CPU Usage:        %6.2f%% [%s]\n",
+                cpu_usage,
+                alert_level_to_string(cpu_level)
+            );
+
+            /*
+             * 输出内存使用率及其告警状态。
+             */
+            printf(
+                "Memory Usage:     %6.2f%% [%s]\n",
+                memory_info.usage_percent,
+                alert_level_to_string(memory_level)
+            );
+
+            /*
+             * 输出磁盘使用率及其告警状态。
+             */
+            printf(
+                "Disk Usage:       %6.2f%% [%s]\n",
+                disk_info.usage_percent,
+                alert_level_to_string(disk_level)
+            );
+
+            /*
+             * 输出整个系统的统一告警状态。
+             */
+            printf(
+                "System Status:           [%s]\n",
+                alert_level_to_string(system_level)
+            );
+
+            /*
+             * 依次输出所有被监控进程的状态。
+             */
+            for (
+                process_index = 0;
+                process_index < monitored_process_count;
+                process_index++
+            )
+            {
+                active_process =
+                    &monitored_processes[process_index];
+
+                if (active_process->available)
                 {
                     printf(
-                        "  CPU:             %.2f%% [%s]\n",
-                        active_process->cpu_usage,
+                        "Process[%zu]:       %s PID=%d PPID=%d\n",
+                        process_index,
+                        active_process->info.name,
+                        active_process->info.pid,
+                        active_process->info.parent_pid
+                    );
+
+                    printf(
+                        "  State:           %s\n",
+                        active_process->info.state
+                    );
+
+                    printf(
+                        "  Memory:          %.2f MiB [%s]\n",
+                        active_process->memory_mib,
                         alert_level_to_string(
-                            active_process->cpu_level
+                            active_process->memory_level
                         )
                     );
-                }
-                else if (active_process->cpu_sample_initialized)
-                {
-                    printf(
-                        "  CPU:            [COLLECTING]\n"
-                    );
+
+                    if (active_process->cpu_usage_valid)
+                    {
+                        printf(
+                            "  CPU:             %.2f%% [%s]\n",
+                            active_process->cpu_usage,
+                            alert_level_to_string(
+                                active_process->cpu_level
+                            )
+                        );
+                    }
+                    else if (active_process->cpu_sample_initialized)
+                    {
+                        printf(
+                            "  CPU:            [COLLECTING]\n"
+                        );
+                    }
+                    else
+                    {
+                        printf(
+                            "  CPU:            [UNAVAILABLE]\n"
+                        );
+                    }
                 }
                 else
                 {
                     printf(
-                        "  CPU:            [UNAVAILABLE]\n"
+                        "Process[%zu]:       %s PID=%d [UNAVAILABLE]\n",
+                        process_index,
+                        active_process->target_name[0] != '\0'
+                            ? active_process->target_name
+                            : "(PID target)",
+                        active_process->current_pid
                     );
                 }
             }
-            else
-            {
-                printf(
-                    "Process[%zu]:       %s PID=%d [UNAVAILABLE]\n",
-                    process_index,
-                    active_process->target_name[0] != '\0'
-                        ? active_process->target_name
-                        : "(PID target)",
-                    active_process->current_pid
-                );
-            }
+
+            /*
+             * 输出磁盘总容量。
+             */
+            printf(
+                "Disk Total:       %6.2f GiB\n",
+                disk_info.total_bytes / BYTES_PER_GIB
+            );
+
+            /*
+             * 输出磁盘已使用容量。
+             */
+            printf(
+                "Disk Used:        %6.2f GiB\n",
+                disk_info.used_bytes / BYTES_PER_GIB
+            );
+
+            /*
+             * 输出磁盘可用容量。
+             */
+            printf(
+                "Disk Available:   %6.2f GiB\n",
+                disk_info.available_bytes / BYTES_PER_GIB
+            );
+
+            /*
+             * RX 表示 Receive，即累计接收流量。
+             *
+             * 接收流量通常对应下载流量。
+             */
+            printf(
+                "Network RX Total: %8.2f MiB\n",
+                current_network.rx_bytes / BYTES_PER_MIB
+            );
+
+            /*
+             * TX 表示 Transmit，即累计发送流量。
+             *
+             * 发送流量通常对应上传流量。
+             */
+            printf(
+                "Network TX Total: %8.2f MiB\n",
+                current_network.tx_bytes / BYTES_PER_MIB
+            );
+
+            /*
+             * 输出实时下载速度。
+             */
+            printf(
+                "Download Speed:   %8.2f %-4s\n",
+                download_display.value,
+                download_display.unit
+            );
+
+            /*
+             * 输出实时上传速度。
+             */
+            printf(
+                "Upload Speed:     %8.2f %-4s\n",
+                upload_display.value,
+                upload_display.unit
+            );
+
+            /*
+             * 分隔不同采样周期的输出。
+             */
+            printf("---------------------------------\n");
         }
-
-        /*
-         * 输出磁盘总容量。
-         */
-        printf(
-            "Disk Total:       %6.2f GiB\n",
-            disk_info.total_bytes / BYTES_PER_GIB
-        );
-
-        /*
-         * 输出磁盘已使用容量。
-         */
-        printf(
-            "Disk Used:        %6.2f GiB\n",
-            disk_info.used_bytes / BYTES_PER_GIB
-        );
-
-        /*
-         * 输出磁盘可用容量。
-         */
-        printf(
-            "Disk Available:   %6.2f GiB\n",
-            disk_info.available_bytes / BYTES_PER_GIB
-        );
-
-        /*
-         * RX 表示 Receive，即累计接收流量。
-         *
-         * 接收流量通常对应下载流量。
-         */
-        printf(
-            "Network RX Total: %8.2f MiB\n",
-            current_network.rx_bytes / BYTES_PER_MIB
-        );
-
-        /*
-         * TX 表示 Transmit，即累计发送流量。
-         *
-         * 发送流量通常对应上传流量。
-         */
-        printf(
-            "Network TX Total: %8.2f MiB\n",
-            current_network.tx_bytes / BYTES_PER_MIB
-        );
-
-        /*
-         * 输出实时下载速度。
-         */
-        printf(
-            "Download Speed:   %8.2f %-4s\n",
-            download_display.value,
-            download_display.unit
-        );
-
-        /*
-         * 输出实时上传速度。
-         */
-        printf(
-            "Upload Speed:     %8.2f %-4s\n",
-            upload_display.value,
-            upload_display.unit
-        );
-
-        /*
-         * 分隔不同采样周期的输出。
-         */
-        printf("---------------------------------\n");
-
         /*
          * 使用名称监控时，如果目标进程已经不可用，
          * 清除旧 PID，让下一轮重新按名称查找。
@@ -2067,7 +2342,7 @@ int main(int argc, char *argv[])
     /*
      * 离开循环后进行安全退出提示。
      */
-    printf("\nEdgeSentinel stopped safely.\n");
+    fprintf(status_stream,"\nEdgeSentinel stopped safely.\n");
 
     return 0;
 }
