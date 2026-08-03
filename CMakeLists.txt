@@ -226,3 +226,73 @@ set_tests_properties(
     PROPERTIES
         TIMEOUT 10
 )
+
+# Build the alert event module test program.
+add_executable(test_alert_event
+    tests/test_alert_event.c
+    src/alert_event.c
+)
+
+target_include_directories(test_alert_event PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_alert_event PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME alert_event_test
+    COMMAND test_alert_event
+)
+
+# Build the notifier module test program.
+add_executable(test_notifier
+    tests/test_notifier.c
+    src/notifier.c
+    src/alert_event.c
+    src/alert.c
+)
+
+target_include_directories(test_notifier PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_notifier PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME notifier_test
+    COMMAND test_notifier
+)
+
+# Build the memory target used by notification integration tests.
+add_executable(notification_memory_target
+    tests/notification_memory_target.c
+)
+
+target_compile_options(notification_memory_target PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+# Verify the complete process memory notification path.
+add_test(
+    NAME notification_integration_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_notification_integration.sh"
+        "$<TARGET_FILE:edgesentinel>"
+        "$<TARGET_FILE:notification_memory_target>"
+)
+
+set_tests_properties(
+    notification_integration_test
+    PROPERTIES
+        TIMEOUT 20
+)

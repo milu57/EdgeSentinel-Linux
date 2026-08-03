@@ -98,6 +98,19 @@ void config_set_defaults(AppConfig *config)
 
     config->network_interface_count = 0;
 
+    /*
+     * 默认关闭外部告警通知。
+     *
+     * 这样旧配置文件没有通知配置时，
+     * 程序仍然保持原有行为。
+     */
+    config->notification_enabled = 0;
+
+    /*
+     * 默认没有配置通知程序路径。
+     */
+    config->notification_command[0] = '\0';
+
     config->cpu_warning_threshold = 70.0;
     config->cpu_critical_threshold = 90.0;
 
@@ -638,6 +651,52 @@ static int config_set_value(
         config->network_interface_count =
             interface_count;
 
+    } else if (
+        strcmp(key, "notification_enabled") == 0
+    ) {
+        /*
+         * notification_enabled 只允许：
+         *
+         *     0：关闭通知
+         *     1：启用通知
+         */
+        if (
+            parse_unsigned_int(
+                value,
+                &unsigned_int_value
+            ) != 0
+        ) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        if (unsigned_int_value > 1) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        config->notification_enabled =
+            unsigned_int_value;
+
+    } else if (
+        strcmp(key, "notification_command") == 0
+    ) {
+        value_length = strlen(value);
+
+        /*
+         * 路径必须能够完整放入数组，
+         * 并为字符串结束符 '\0' 保留位置。
+         */
+        if (
+            value_length >=
+            sizeof(config->notification_command)
+        ) {
+            return CONFIG_VALUE_INVALID;
+        }
+
+        memcpy(
+            config->notification_command,
+            value,
+            value_length + 1
+        );
     } else if (
         strcmp(key, "cpu_warning_threshold") == 0
     ) {
@@ -1258,6 +1317,64 @@ int config_validate(const AppConfig *config)
         }
     }
 
+    /*
+     * notification_enabled 只能是 0 或 1。
+     *
+     * config_set_value() 已经检查一次，
+     * 此处再次检查是为了防止调用者直接修改 AppConfig。
+     */
+    if (config->notification_enabled > 1) {
+        fprintf(
+            stderr,
+            "Invalid notification_enabled: "
+            "expected 0 or 1, got %u\n",
+            config->notification_enabled
+        );
+
+        return -1;
+    }
+
+    /*
+     * notification_command 必须在数组范围内
+     * 包含字符串结束符 '\0'。
+     */
+    if (
+        memchr(
+            config->notification_command,
+            '\0',
+            CONFIG_NOTIFICATION_COMMAND_LENGTH
+        ) == NULL
+    ) {
+        fprintf(
+            stderr,
+            "Invalid notification_command: "
+            "path is not null-terminated\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 启用通知时必须配置外部程序路径。
+     *
+     * 关闭通知时允许提前保存路径，
+     * 方便之后只修改 notification_enabled。
+     */
+    if (
+        config->notification_enabled == 1 &&
+        config->notification_command[0] == '\0'
+    ) {
+        fprintf(
+            stderr,
+            "Invalid notification configuration: "
+            "notification_command is required "
+            "when notification is enabled\n"
+        );
+
+        return -1;
+    }
+
+
     if (
         validate_threshold_pair(
             "CPU",
@@ -1456,6 +1573,22 @@ void config_print(const AppConfig *config)
             );
         }
     }
+
+    printf(
+        "notification_enabled       : %u (%s)\n",
+        config->notification_enabled,
+        config->notification_enabled
+            ? "enabled"
+            : "disabled"
+    );
+
+    printf(
+        "notification_command       : %s\n",
+        config->notification_command[0] != '\0'
+            ? config->notification_command
+            : "(not set)"
+    );
+
 
     printf("cpu_warning_threshold     : %.2f%%\n",
            config->cpu_warning_threshold);
