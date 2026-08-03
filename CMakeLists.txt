@@ -247,3 +247,26 @@ add_test(
     NAME alert_event_test
     COMMAND test_alert_event
 )
+
+# Build the notifier module test program.
+add_executable(test_notifier
+    tests/test_notifier.c
+    src/notifier.c
+    src/alert_event.c
+    src/alert.c
+)
+
+target_include_directories(test_notifier PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_notifier PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME notifier_test
+    COMMAND test_notifier
+)
