@@ -6,10 +6,12 @@
 
 #include "config.h"
 #include "alert.h"
+#include "alert_event.h"
 #include "cpu_monitor.h"
 #include "disk_monitor.h"
 #include "logger.h"
 #include "network.h"
+#include "notifier.h"
 #include "output.h"
 #include "process_monitor.h"
 #include "system_monitor.h"
@@ -129,6 +131,89 @@ static double calculate_elapsed_seconds(
 }
 
 /*
+ * 在告警等级发生变化时发送通知。
+ *
+ * 通知关闭时直接返回；
+ * 通知失败只输出错误，不终止系统监控。
+ */
+static void send_alert_change_notification(
+    const AppConfig *config,
+    AlertMetric metric,
+    const char *target,
+    AlertLevel previous_level,
+    AlertLevel current_level,
+    double current_value,
+    const char *unit
+)
+{
+    AlertEvent event;
+
+    if (
+        config == NULL ||
+        target == NULL ||
+        unit == NULL
+    ) {
+        return;
+    }
+
+    /*
+     * 只有显式启用通知时才发送。
+     */
+    if (config->notification_enabled != 1) {
+        return;
+    }
+
+    /*
+     * 告警等级没有变化时不重复发送。
+     */
+    if (previous_level == current_level) {
+        return;
+    }
+
+    if (
+        alert_event_init(
+            &event,
+            metric,
+            target,
+            previous_level,
+            current_level,
+            current_value,
+            unit
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "Failed to create alert notification event: "
+            "metric=%s target=%s\n",
+            alert_metric_to_string(metric),
+            target
+        );
+
+        return;
+    }
+
+    /*
+     * 通知属于附加功能。
+     *
+     * 即使发送失败，核心监控程序也继续运行。
+     */
+    if (
+        notifier_send(
+            &event,
+            config->notification_command
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "Failed to send alert notification: "
+            "metric=%s target=%s\n",
+            alert_metric_to_string(metric),
+            target
+        );
+    }
+}
+
+/*
  * 完成一个目标进程的一轮监控。
  *
  * 返回：
@@ -147,6 +232,11 @@ static int monitor_process_once(
     double process_elapsed_seconds;
     char log_message[256];
     int log_message_length;
+    char notification_target[
+        ALERT_EVENT_TARGET_LENGTH
+    ];
+
+    int notification_target_length;
 
     if (
         process == NULL ||
@@ -211,6 +301,34 @@ static int monitor_process_once(
     else
     {
         process->available = 1;
+        /*
+         * 为通知生成能够区分具体进程的目标名称。
+         *
+         * 示例：
+         *     sleep PID=1234
+         */
+        notification_target_length = snprintf(
+            notification_target,
+            sizeof(notification_target),
+            "%s PID=%d",
+            process->info.name[0] != '\0'
+                ? process->info.name
+                : "process",
+            process->current_pid
+        );
+
+        if (
+            notification_target_length < 0 ||
+            (size_t)notification_target_length >=
+                sizeof(notification_target)
+        ) {
+            fprintf(
+                stderr,
+                "Failed to format process notification target\n"
+            );
+
+            return -1;
+        }
 
         /*
          * VmRSS 的单位是 kB。
@@ -293,6 +411,16 @@ static int monitor_process_once(
 
                 return -1;
             }
+
+            send_alert_change_notification(
+                config,
+                ALERT_METRIC_PROCESS_MEMORY,
+                notification_target,
+                process->previous_memory_level,
+                process->memory_level,
+                process->memory_mib,
+                "MiB"
+            );
 
             process->previous_memory_level =
                 process->memory_level;
@@ -442,6 +570,16 @@ static int monitor_process_once(
 
                             return -1;
                         }
+
+                        send_alert_change_notification(
+                            config,
+                            ALERT_METRIC_PROCESS_CPU,
+                            notification_target,
+                            process->previous_cpu_level,
+                            process->cpu_level,
+                            process->cpu_usage,
+                            "%"
+                        );
 
                         process->previous_cpu_level =
                             process->cpu_level;
