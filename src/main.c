@@ -1119,6 +1119,23 @@ int main(int argc, char *argv[])
     AlertLevel disk_level;
     AlertLevel system_level;
 
+    /*
+     * 分别保存系统 CPU、内存和磁盘的上一次告警等级。
+     *
+     * 独立保存后，某一种资源发生变化时，
+     * 可以准确生成对应资源的通知。
+     */
+    AlertLevel previous_cpu_level;
+    AlertLevel previous_memory_level;
+    AlertLevel previous_disk_level;
+
+    /*
+     * 第一次采样只建立告警状态基准，不发送通知。
+     */
+    int cpu_level_initialized = 0;
+    int memory_level_initialized = 0;
+    int disk_level_initialized = 0;
+
 	/*
 	 * 保存上一次采样得到的系统状态，
 	 * 用于判断状态是否发生变化。
@@ -1507,6 +1524,22 @@ int main(int argc, char *argv[])
                 config = reloaded_config;
 
                 /*
+                 * 告警阈值可能已经通过热加载发生变化。
+                 *
+                 * 清除旧状态基准，让下一轮采样按照新阈值
+                 * 重新建立 CPU、内存和磁盘告警状态，
+                 * 避免仅因修改阈值而立即发送通知。
+                 */
+                cpu_level_initialized = 0;
+                memory_level_initialized = 0;
+                disk_level_initialized = 0;
+
+                /*
+                 * 系统汇总状态也重新建立基准。
+                 */
+                system_level_initialized = 0;
+
+                /*
                  * 网络接口列表可能已经发生变化。
                  *
                  * 将按照新配置读取的累计流量和采样时间
@@ -1772,6 +1805,32 @@ int main(int argc, char *argv[])
 	    config.cpu_critical_threshold
 	);
 
+    /*
+     * 第一次 CPU 采样只保存当前等级。
+     */
+    if (!cpu_level_initialized)
+    {
+        previous_cpu_level = cpu_level;
+        cpu_level_initialized = 1;
+    }
+    /*
+     * 后续采样中，CPU 等级变化时发送通知。
+     */
+    else if (cpu_level != previous_cpu_level)
+    {
+        send_alert_change_notification(
+            &config,
+            ALERT_METRIC_SYSTEM_CPU,
+            "system",
+            previous_cpu_level,
+            cpu_level,
+            cpu_usage,
+            "%"
+        );
+
+        previous_cpu_level = cpu_level;
+    }
+
         /*
          * 读取当前累计网络流量。
          */
@@ -1912,6 +1971,29 @@ int main(int argc, char *argv[])
 	    config.memory_critical_threshold
 	);
 
+    /*
+     * 第一次内存采样只建立状态基准。
+     */
+    if (!memory_level_initialized)
+    {
+        previous_memory_level = memory_level;
+        memory_level_initialized = 1;
+    }
+    else if (memory_level != previous_memory_level)
+    {
+        send_alert_change_notification(
+            &config,
+            ALERT_METRIC_SYSTEM_MEMORY,
+            "system",
+            previous_memory_level,
+            memory_level,
+            memory_info.usage_percent,
+            "%"
+        );
+
+        previous_memory_level = memory_level;
+    }
+
         /*
          * 读取根文件系统 / 的磁盘信息。
          */
@@ -1930,6 +2012,33 @@ int main(int argc, char *argv[])
 	    config.disk_warning_threshold,
 	    config.disk_critical_threshold
 	);
+        /*
+         * 第一次磁盘采样只建立状态基准，
+         * 不发送通知。
+         */
+        if (!disk_level_initialized)
+        {
+            previous_disk_level = disk_level;
+            disk_level_initialized = 1;
+        }
+        /*
+         * 后续磁盘等级发生变化时发送通知。
+         */
+        else if (disk_level != previous_disk_level)
+        {
+            send_alert_change_notification(
+                &config,
+                ALERT_METRIC_DISK,
+                "/",
+                previous_disk_level,
+                disk_level,
+                disk_info.usage_percent,
+                "%"
+            );
+
+            previous_disk_level = disk_level;
+        }
+
 
         /*
          * 计算整个系统的统一告警状态。
