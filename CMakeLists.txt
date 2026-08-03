@@ -226,3 +226,24 @@ set_tests_properties(
     PROPERTIES
         TIMEOUT 10
 )
+
+# Build the alert event module test program.
+add_executable(test_alert_event
+    tests/test_alert_event.c
+    src/alert_event.c
+)
+
+target_include_directories(test_alert_event PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_alert_event PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME alert_event_test
+    COMMAND test_alert_event
+)
