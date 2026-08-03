@@ -14,7 +14,7 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 
 ## 当前版本
 
-**v1.8.0**
+**v2.0.0**
 
 ---
 
@@ -99,6 +99,15 @@ EdgeSentinel-Linux 是一个使用 C 语言开发的 Linux 系统与进程资源
 - 进程 CPU 告警状态变化日志
 - 进程内存告警状态变化日志
 - 日志文件自动轮转
+- 支持系统 CPU、系统内存和磁盘告警通知
+- 支持目标进程 CPU 和常驻内存告警通知
+- 支持告警恢复通知
+- 仅在告警等级变化时发送通知
+- 首次采样只建立告警状态基准，不发送通知
+- 通知失败不会中止核心监控程序
+- 支持通过 `SIGHUP` 热更新通知配置
+- 提供 `scripts/notify-log.sh` 示例通知脚本
+
 
 ### 服务管理
 
@@ -159,6 +168,9 @@ EdgeSentinel-Linux/
 │
 ├── include/
 │   ├── alert.h
+│   ├── alert_event.h
+│   ├── notifier.h
+│   ├── output.h
 │   ├── config.h
 │   ├── cpu_monitor.h
 │   ├── disk_monitor.h
@@ -170,6 +182,9 @@ EdgeSentinel-Linux/
 │
 ├── src/
 │   ├── alert.c
+│   ├── alert_event.c
+│   ├── notifier.c
+│   ├── output.c
 │   ├── config.c
 │   ├── cpu_monitor.c
 │   ├── disk_monitor.c
@@ -184,6 +199,12 @@ EdgeSentinel-Linux/
 │   ├── test_process_monitor.c
 │   ├── test_config.c
 │   ├── test_alert.c
+│   ├── test_alert_event.c
+│   ├── test_notifier.c
+│   ├── test_output.c
+│   ├── test_json_output.sh
+│   ├── notification_memory_target.c
+│   └── test_notification_integration.sh
 │   ├── test_logger.c
 │   ├── test_system_resources.c
 │   ├── test_calculations.c
@@ -193,6 +214,7 @@ EdgeSentinel-Linux/
 │
 ├── scripts/
 │   ├── install.sh
+│   ├── notify-log.sh
 │   └── uninstall.sh
 │
 ├── systemd/
@@ -272,11 +294,14 @@ ctest --test-dir build --output-on-failure
 - CPU 和网络计算测试；
 - 程序启动与安全退出集成测试；
 - 非法配置启动集成测试。
+- 统一告警事件模型测试；
+- 通知消息格式化与外部通知程序调用测试；
+- 进程内存告警通知完整链路集成测试。
 
 测试全部通过时会显示：
 
 ~~~text
-100% tests passed, 0 tests failed out of 8
+100% tests passed, 0 tests failed out of 13
 ~~~
 
 也可以单独运行某个测试程序，例如：
@@ -444,6 +469,14 @@ process_pid=0
 # 配置多个接口时，使用英文逗号分隔
 # 示例：network_interfaces=enp0s3,wlan0
 
+# 是否启用外部告警通知
+# 0：关闭
+# 1：启用
+notification_enabled=0
+
+# 外部通知程序或脚本路径
+notification_command=scripts/notify-log.sh
+
 # 整个系统的 CPU 使用率告警阈值
 cpu_warning_threshold=70.0
 cpu_critical_threshold=90.0
@@ -484,6 +517,8 @@ EdgeSentinel 按照以下优先级确定需要监控的目标进程：
 2. 当 `process_names` 为空且 `process_name` 非空时，程序按照单进程名称模式监控目标进程；
 3. 当 `process_names` 和 `process_name` 都为空，且 `process_pid` 大于 `0` 时，程序监控指定 PID；
 4. 当 `process_names` 和 `process_name` 都为空，且 `process_pid` 等于 `0` 时，程序监控 EdgeSentinel 自身。
+5. `notification_enabled`：外部告警通知开关，只允许设置为 `0` 或 `1`；
+6. `notification_command`：接收告警消息的外部可执行程序或脚本路径；
 
 多进程名称配置示例：
 
@@ -569,6 +604,130 @@ network_interfaces=lo
 ```
 
 ---
+
+## 告警通知
+
+EdgeSentinel 可以在告警等级发生变化时启动外部程序或脚本，并通过该程序的标准输入传递格式化后的告警消息。
+
+通知覆盖以下监控指标：
+
+* 系统 CPU 使用率；
+* 系统内存使用率；
+* 根文件系统磁盘使用率；
+* 目标进程 CPU 使用率；
+* 目标进程常驻内存。
+
+### 启用通知
+
+在配置文件中设置：
+
+```ini
+notification_enabled=1
+notification_command=scripts/notify-log.sh
+```
+
+其中：
+
+* `notification_enabled=0`：关闭外部通知；
+* `notification_enabled=1`：启用外部通知；
+* `notification_command`：通知程序或脚本的可执行路径。
+
+项目提供的示例通知脚本为：
+
+```text
+scripts/notify-log.sh
+```
+
+从项目根目录运行 EdgeSentinel 时，该脚本默认把通知消息追加到：
+
+```text
+logs/notifications.log
+```
+
+### 通知消息格式
+
+系统 CPU 通知示例：
+
+```text
+[EdgeSentinel] SYSTEM_CPU target=system status=NORMAL->CRITICAL value=68.58% time=2026-08-03 20:20:21
+```
+
+进程内存通知示例：
+
+```text
+[EdgeSentinel] PROCESS_MEMORY target=alerttest PID=11579 status=NORMAL->CRITICAL value=65.55MiB time=2026-08-03 20:08:20
+```
+
+一条通知消息包含：
+
+* 监控指标；
+* 告警目标；
+* 原告警等级；
+* 当前告警等级；
+* 当前监控值和单位；
+* 告警发生时间。
+
+### 通知触发规则
+
+程序第一次取得某项资源的告警等级时，只保存状态基准，不发送通知。
+
+后续仅在告警等级发生变化时发送通知，例如：
+
+```text
+NORMAL -> WARNING
+WARNING -> CRITICAL
+CRITICAL -> WARNING
+WARNING -> NORMAL
+CRITICAL -> NORMAL
+```
+
+如果资源连续保持相同告警等级，程序不会在每次采样时重复发送通知。
+
+资源恢复到 `NORMAL` 时也会发送恢复通知，因此外部系统可以同时接收异常通知和恢复通知。
+
+### 自定义通知程序
+
+通知程序需要满足以下要求：
+
+1. 文件存在并具有执行权限；
+2. 从标准输入读取通知消息；
+3. 完成处理后及时退出；
+4. 成功时返回退出状态 `0`；
+5. 失败时返回非零退出状态。
+
+`notification_command` 表示单个可执行程序或脚本的路径，不是完整的 Shell 命令行。因此不要直接配置管道、重定向符号或多个命令。
+
+错误示例：
+
+```ini
+notification_command=curl ... | logger
+```
+
+需要执行多个操作时，应把完整逻辑写入一个独立脚本，再配置该脚本的路径：
+
+```ini
+notification_command=/opt/edgesentinel/scripts/send-alert.sh
+```
+
+使用 systemd 服务或安装后的 EdgeSentinel 时，建议配置绝对路径，避免因工作目录不同而无法找到通知脚本。
+
+通知程序执行失败时，EdgeSentinel 会输出错误信息，但核心资源监控不会因此停止。
+
+### 自定义通知日志位置
+
+示例脚本支持通过环境变量修改通知日志路径：
+
+```bash
+export EDGESENTINEL_NOTIFICATION_LOG=/tmp/edgesentinel-alerts.log
+
+./build/edgesentinel \
+    -c config/edgesentinel.conf
+```
+
+CPU、内存、磁盘阈值和通知配置都支持通过 `SIGHUP` 热加载。
+
+热加载成功后，系统 CPU、系统内存、磁盘和系统汇总状态会重新建立告警基准，避免仅因阈值发生变化而立即产生误通知。
+
 
 ## 进程监控
 
@@ -1432,6 +1591,43 @@ tail -n 30 logs/edgesentinel.log
 ---
 
 ## 版本说明
+
+### v2.0.0
+
+* 新增统一的 `AlertEvent` 告警事件模型；
+* 新增系统 CPU、系统内存和磁盘告警通知；
+* 新增目标进程 CPU 和常驻内存告警通知；
+* 支持 `NORMAL`、`WARNING` 和 `CRITICAL` 等级变化通知；
+* 支持告警恢复通知；
+* 首次采样只建立告警状态基准，不发送通知；
+* 告警等级保持不变时不重复发送通知；
+* 新增外部通知程序调用模块；
+* 通过标准输入向外部程序传递格式化告警消息；
+* 外部通知程序返回非零状态时判定为发送失败；
+* 通知发送失败不会终止核心监控程序；
+* 新增 `notification_enabled` 配置项；
+* 新增 `notification_command` 配置项；
+* 支持通过 `SIGHUP` 热更新通知配置；
+* 热加载告警阈值后重新建立状态基准，避免产生误通知；
+* 新增 `scripts/notify-log.sh` 示例通知脚本；
+* 新增通知消息格式化和外部程序调用测试；
+* 新增进程内存告警通知完整链路集成测试；
+* 自动化测试数量增加至 13 项。
+
+### v1.9.0
+
+* 新增 JSON Lines 结构化监控输出；
+* 新增 `--output text` 和 `--output json` 命令行选项；
+* 默认继续使用文本输出模式；
+* JSON 模式下每轮采样输出一个独立 JSON 对象；
+* JSON 模式下标准输出只保留 JSON 数据；
+* 启动信息、诊断信息和错误信息改为输出到标准错误；
+* 新增统一的 `MonitorSnapshot` 监控快照；
+* 文本输出和 JSON 输出共享同一轮采样数据；
+* JSON 输出包含系统时间、运行时间、负载、CPU、内存、磁盘、网络和进程状态；
+* 支持输出多个被监控进程的数据；
+* 新增输出模块单元测试；
+* 新增 JSON Lines 启动与输出集成测试。
 
 ### v1.8.0
 
