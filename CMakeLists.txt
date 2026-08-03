@@ -190,3 +190,39 @@ set_tests_properties(
     PROPERTIES
         TIMEOUT 10
 )
+
+# Build the output module test program.
+add_executable(test_output
+    tests/test_output.c
+    src/output.c
+    src/alert.c
+)
+
+target_include_directories(test_output PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+)
+
+target_compile_options(test_output PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+add_test(
+    NAME output_test
+    COMMAND test_output
+)
+
+# Verify that JSON mode writes only JSON Lines to stdout.
+add_test(
+    NAME json_output_integration_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_json_output.sh"
+        "$<TARGET_FILE:edgesentinel>"
+)
+
+set_tests_properties(
+    json_output_integration_test
+    PROPERTIES
+        TIMEOUT 10
+)
