@@ -133,6 +133,33 @@ static int test_config_defaults(void)
         }
     }
 
+    /*
+     * 告警通知默认关闭。
+     */
+    if (config.notification_enabled != 0) {
+        fprintf(
+            stderr,
+            "unexpected notification_enabled: %u\n",
+            config.notification_enabled
+        );
+
+        return -1;
+    }
+
+    /*
+     * 默认没有配置外部通知命令。
+     */
+    if (config.notification_command[0] != '\0') {
+        fprintf(
+            stderr,
+            "notification_command should be empty: %s\n",
+            config.notification_command
+        );
+
+        return -1;
+    }
+
+
     if (config.cpu_warning_threshold != 70.0) {
         fprintf(
             stderr,
@@ -2360,6 +2387,257 @@ static int test_invalid_network_interface_lists_rejected(void)
     return 0;
 }
 
+/*
+ * 测试合法通知配置能否正确加载并通过验证。
+ */
+static int test_notification_configuration_load(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_notification.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    config_set_defaults(&config);
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "notification_enabled=1\n"
+            "notification_command=/tmp/edgesentinel-notify.sh\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write notification configuration\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+        return -1;
+    }
+
+    if (config_load(test_filename, &config) != 0) {
+        fprintf(
+            stderr,
+            "failed to load valid notification configuration\n"
+        );
+
+        remove(test_filename);
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    if (config.notification_enabled != 1) {
+        fprintf(
+            stderr,
+            "unexpected loaded notification_enabled: %u\n",
+            config.notification_enabled
+        );
+
+        return -1;
+    }
+
+    if (
+        strcmp(
+            config.notification_command,
+            "/tmp/edgesentinel-notify.sh"
+        ) != 0
+    ) {
+        fprintf(
+            stderr,
+            "unexpected notification_command: %s\n",
+            config.notification_command
+        );
+
+        return -1;
+    }
+
+    /*
+     * config_load() 只负责解析，
+     * 所以还需要显式验证配置之间的组合关系。
+     */
+    if (config_validate(&config) != 0) {
+        fprintf(
+            stderr,
+            "valid notification configuration was rejected\n"
+        );
+
+        return -1;
+    }
+
+    printf("notification configuration load test passed\n");
+
+    return 0;
+}
+
+/*
+ * 测试非法通知配置是否会被拒绝。
+ */
+static int test_invalid_notification_configuration(void)
+{
+    const char *test_filename =
+        "/tmp/edgesentinel_test_invalid_notification.conf";
+
+    FILE *file;
+    AppConfig config;
+
+    /*
+     * 情况一：
+     * notification_enabled 只能为 0 或 1。
+     */
+    config_set_defaults(&config);
+
+    file = fopen(test_filename, "w");
+
+    if (file == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    if (
+        fprintf(
+            file,
+            "notification_enabled=2\n"
+        ) < 0
+    ) {
+        fprintf(
+            stderr,
+            "failed to write invalid notification flag\n"
+        );
+
+        fclose(file);
+        remove(test_filename);
+
+        return -1;
+    }
+
+    if (fclose(file) != 0) {
+        perror("fclose");
+        remove(test_filename);
+        return -1;
+    }
+
+    if (config_load(test_filename, &config) == 0) {
+        fprintf(
+            stderr,
+            "config_load accepted notification_enabled=2\n"
+        );
+
+        remove(test_filename);
+        return -1;
+    }
+
+    if (remove(test_filename) != 0) {
+        perror("remove");
+        return -1;
+    }
+
+    /*
+     * 情况二：
+     * 直接修改结构体时，非法开关也必须被拒绝。
+     */
+    config_set_defaults(&config);
+
+    config.notification_enabled = 2;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted notification_enabled=2\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 情况三：
+     * 启用通知但没有配置命令路径。
+     */
+    config_set_defaults(&config);
+
+    config.notification_enabled = 1;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted enabled notification "
+            "without a command\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 情况四：
+     * notification_command 没有字符串结束符。
+     */
+    config_set_defaults(&config);
+
+    memset(
+        config.notification_command,
+        'A',
+        sizeof(config.notification_command)
+    );
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted notification command "
+            "without null termination\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 情况五：
+     * 关闭通知时允许提前保存命令路径。
+     */
+    config_set_defaults(&config);
+
+    config.notification_enabled = 0;
+
+    snprintf(
+        config.notification_command,
+        sizeof(config.notification_command),
+        "%s",
+        "/tmp/edgesentinel-notify.sh"
+    );
+
+    if (config_validate(&config) != 0) {
+        fprintf(
+            stderr,
+            "disabled notification with configured command "
+            "was rejected\n"
+        );
+
+        return -1;
+    }
+
+    printf("invalid notification configuration tests passed\n");
+
+    return 0;
+}
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -2515,6 +2793,24 @@ int main(void)
         fprintf(
             stderr,
             "empty key or value rejection test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_notification_configuration_load() != 0) {
+        fprintf(
+            stderr,
+            "notification configuration load test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_invalid_notification_configuration() != 0) {
+        fprintf(
+            stderr,
+            "invalid notification configuration test failed\n"
         );
 
         return 1;

@@ -6,7 +6,13 @@
 #define CONFIG_PROCESS_NAME_LENGTH 256
 #define CONFIG_MAX_NETWORK_INTERFACES 8
 #define CONFIG_NETWORK_INTERFACE_NAME_LENGTH 32
-
+/*
+ * 通知程序路径的最大长度。
+ *
+ * notification_command 只保存一个可执行程序或脚本路径，
+ * 不保存带参数的 Shell 命令。
+ */
+#define CONFIG_NOTIFICATION_COMMAND_LENGTH 256
 
 /*
  * EdgeSentinel-Linux 全局配置
@@ -66,6 +72,29 @@ typedef struct {
      * network_interfaces 数组中实际保存的接口数量。
      */
     unsigned int network_interface_count;
+
+    /*
+     * 是否启用告警通知。
+     *
+     * 0：
+     *     关闭通知。
+     *
+     * 1：
+     *     启用通知。
+     */
+    unsigned int notification_enabled;
+
+    /*
+     * 接收告警消息的外部程序或脚本路径。
+     *
+     * 后续 EdgeSentinel 会直接执行该程序，
+     * 并通过标准输入传递通知消息。
+     *
+     * 这里只保存路径，不保存 Shell 参数。
+     */
+    char notification_command[
+        CONFIG_NOTIFICATION_COMMAND_LENGTH
+    ];
 
     /* CPU 告警阈值 */
     double cpu_warning_threshold;
