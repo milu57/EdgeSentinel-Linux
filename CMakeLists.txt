@@ -270,3 +270,29 @@ add_test(
     NAME notifier_test
     COMMAND test_notifier
 )
+
+# Build the memory target used by notification integration tests.
+add_executable(notification_memory_target
+    tests/notification_memory_target.c
+)
+
+target_compile_options(notification_memory_target PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+# Verify the complete process memory notification path.
+add_test(
+    NAME notification_integration_test
+    COMMAND bash
+        "${PROJECT_SOURCE_DIR}/tests/test_notification_integration.sh"
+        "$<TARGET_FILE:edgesentinel>"
+        "$<TARGET_FILE:notification_memory_target>"
+)
+
+set_tests_properties(
+    notification_integration_test
+    PROPERTIES
+        TIMEOUT 20
+)
