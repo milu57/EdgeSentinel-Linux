@@ -38,4 +38,24 @@ int notifier_format_message(
     size_t buffer_size
 );
 
+/*
+ * 执行外部通知程序并发送告警事件。
+ *
+ * event：
+ *     要发送的告警事件。
+ *
+ * command：
+ *     外部通知程序或脚本的路径。
+ *
+ * 通知消息通过外部程序的标准输入传递。
+ *
+ * 成功返回 0；
+ * 参数非法、进程创建失败、写入失败或外部程序
+ * 返回非零状态时返回 -1。
+ */
+int notifier_send(
+    const AlertEvent *event,
+    const char *command
+);
+
 #endif
