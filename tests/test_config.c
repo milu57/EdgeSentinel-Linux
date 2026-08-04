@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -2638,6 +2639,57 @@ static int test_invalid_notification_configuration(void)
     return 0;
 }
 
+/*
+ * 测试 process_pid 转换成 int 之前的范围校验。
+ *
+ * INT_MAX 可以安全转换成 int，因此应当通过；
+ * INT_MAX + 1 超出 int 范围，因此必须被拒绝。
+ */
+static int test_process_pid_range_validation(void)
+{
+    AppConfig config;
+
+    /*
+     * 情况一：
+     * INT_MAX 是 int 能表示的最大值，应当合法。
+     */
+    config_set_defaults(&config);
+
+    config.process_pid = (unsigned int)INT_MAX;
+
+    if (config_validate(&config) != 0) {
+        fprintf(
+            stderr,
+            "config_validate rejected process_pid=INT_MAX\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 情况二：
+     * INT_MAX + 1 仍然能由 unsigned int 保存，
+     * 但无法安全转换成 int，因此必须被拒绝。
+     */
+    config_set_defaults(&config);
+
+    config.process_pid =
+        (unsigned int)INT_MAX + 1U;
+
+    if (config_validate(&config) == 0) {
+        fprintf(
+            stderr,
+            "config_validate accepted process_pid above INT_MAX\n"
+        );
+
+        return -1;
+    }
+
+    printf("process PID range validation test passed\n");
+
+    return 0;
+}
+
 int main(void)
 {
     if (test_config_defaults() != 0) {
@@ -2757,6 +2809,15 @@ int main(void)
         fprintf(
             stderr,
             "zero monitor interval validation test failed\n"
+        );
+
+        return 1;
+    }
+
+    if (test_process_pid_range_validation() != 0) {
+        fprintf(
+            stderr,
+            "process PID range validation test failed\n"
         );
 
         return 1;
