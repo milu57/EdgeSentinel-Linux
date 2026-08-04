@@ -1,5 +1,7 @@
 # 编译目录和目标文件
 build/
+/build-aarch64/
+
 *.o
 *.obj
 *.a
