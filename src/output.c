@@ -518,6 +518,8 @@ int output_print_json(
 
     printf("}\n");
 
+    fflush(stdout);
+
     return 0;
 }
 
