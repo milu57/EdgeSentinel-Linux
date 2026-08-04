@@ -1125,9 +1125,9 @@ int main(int argc, char *argv[])
      * 独立保存后，某一种资源发生变化时，
      * 可以准确生成对应资源的通知。
      */
-    AlertLevel previous_cpu_level;
-    AlertLevel previous_memory_level;
-    AlertLevel previous_disk_level;
+    AlertLevel previous_cpu_level = ALERT_NORMAL;
+    AlertLevel previous_memory_level = ALERT_NORMAL;
+    AlertLevel previous_disk_level = ALERT_NORMAL;
 
     /*
      * 第一次采样只建立告警状态基准，不发送通知。
@@ -1140,7 +1140,7 @@ int main(int argc, char *argv[])
 	 * 保存上一次采样得到的系统状态，
 	 * 用于判断状态是否发生变化。
 	 */
-	AlertLevel previous_system_level;
+	AlertLevel previous_system_level = ALERT_NORMAL;
 	
 	/*
 	 * 标记 previous_system_level 是否已经获得有效值。

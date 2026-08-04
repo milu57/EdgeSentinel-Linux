@@ -1,3 +1,13 @@
+/*
+ * 测试程序必须始终启用 assert。
+ *
+ * Release 构建通常会定义 NDEBUG，
+ * 导致 assert() 被编译器删除，使测试失效。
+ */
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
