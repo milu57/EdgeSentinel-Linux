@@ -275,6 +275,49 @@ cmake --build build --clean-first
 该命令会先清理旧的目标文件，再重新编译整个项目。
 
 ---
+## ARM64 / AArch64 交叉编译
+
+项目提供 AArch64 GNU/Linux CMake 工具链文件，可在 x86_64 Linux 主机上交叉编译 ARM64 版本。
+
+### 1. 配置 ARM64 构建目录
+
+```bash
+cmake -S . -B build-aarch64 -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
+```
+
+其中：
+
+- `-S .`：指定当前目录为源码目录；
+- `-B build-aarch64`：使用独立的 ARM64 构建目录；
+- `CMAKE_TOOLCHAIN_FILE`：指定 AArch64 交叉编译工具链文件。
+
+### 2. 编译 ARM64 版本
+
+```bash
+cmake --build build-aarch64
+```
+
+生成的主程序位于：
+
+```text
+build-aarch64/edgesentinel
+```
+
+### 3. 验证目标架构
+
+```bash
+file build-aarch64/edgesentinel
+```
+
+正常输出应包含 `ELF 64-bit` 和 `ARM aarch64`。
+
+也可以运行项目提供的 ARM64 QEMU 验证脚本：
+
+```bash
+./scripts/test-arm64-qemu.sh
+```
+
+---
 
 ## 自动化测试
 
@@ -1592,6 +1635,20 @@ tail -n 30 logs/edgesentinel.log
 
 ## 版本说明
 
+### v2.1.0
+
+- 新增 AArch64 / ARM64 Linux 交叉编译支持；
+- 新增 `cmake/toolchains/aarch64-linux-gnu.cmake` 交叉编译工具链文件；
+- 支持通过 CMake 独立生成 `build-aarch64` ARM64 构建目录；
+- 新增 ARM64 QEMU 自动验证脚本 `scripts/test-arm64-qemu.sh`；
+- 加强跨平台构建安全性；
+- 增强进程 PID 整数范围校验；
+- JSON 模式下每轮采样后主动刷新标准输出，改善管道和 QEMU 环境下的实时输出行为；
+- 验证生成程序为 ELF64 AArch64 可执行文件；
+- 完成 ARM64 动态库与 GLIBC 版本兼容性检查；
+- 完成 RK3588 Ubuntu 22.04 AArch64 真机部署与运行验证；
+- 验证 EdgeSentinel 可通过 systemd 服务在 RK3588 上稳定运行。
+
 ### v2.0.0
 
 * 新增统一的 `AlertEvent` 告警事件模型；
@@ -1803,14 +1860,6 @@ tail -n 30 logs/edgesentinel.log
 - 新增内存监控；
 - 从 `/proc/meminfo` 读取 `MemTotal` 和 `MemAvailable`；
 - 计算系统内存使用率。
-
----
-
-## 后续计划
-* 增加网络接口过滤配置；
-* 增加更多通知和告警方式；
-* 增加 JSON 或其他结构化输出格式；
-* 为 ARM Linux 和边缘设备部署进行适配。
 
 
 ---

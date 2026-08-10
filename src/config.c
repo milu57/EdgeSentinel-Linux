@@ -1155,6 +1155,25 @@ int config_validate(const AppConfig *config)
     }
 
     /*
+     * process_pid 最终会转换成 int，并传给进程监控函数。
+     *
+     * 因此 process_pid 不能超过 INT_MAX，
+     * 否则 unsigned int 转换成 int 时可能产生错误结果。
+     *
+     * process_pid == 0 是合法值，表示不使用固定 PID。
+     */
+    if (config->process_pid > (unsigned int)INT_MAX) {
+        fprintf(
+            stderr,
+            "Invalid process_pid: %u exceeds maximum %d\n",
+            config->process_pid,
+            INT_MAX
+        );
+
+        return -1;
+    }
+
+    /*
      * 进程名称数量不能超过数组容量。
      */
     if (

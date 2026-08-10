@@ -300,7 +300,8 @@ int read_process_info(int pid, ProcessInfo *info)
                 snprintf(
                     result.name,
                     sizeof(result.name),
-                    "%s",
+                    "%.*s",
+                    (int)(sizeof(result.name) - 1),
                     name_start
                 );
 
@@ -344,17 +345,18 @@ int read_process_info(int pid, ProcessInfo *info)
 	    /*
 	     * 确保状态字符串不为空。
 	     */
-	    if (*state_start != '\0') {
-	        snprintf(
-	            result.state,
-	            sizeof(result.state),
-	            "%s",
-	            state_start
-	        );
+    if (*state_start != '\0') {
+        snprintf(
+            result.state,
+            sizeof(result.state),
+            "%.*s",
+            (int)(sizeof(result.state) - 1),
+            state_start
+        );
 	
-	        found_state = 1;
-	    }
+	    found_state = 1;
 	}
+}
 
         /*
          * 读取父进程 PID。
